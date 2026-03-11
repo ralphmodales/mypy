@@ -8,6 +8,7 @@ from mypy.nodes import (
     AssignmentStmt,
     BytesExpr,
     CallExpr,
+    ClassDef,
     IndexExpr,
     MemberExpr,
     NameExpr,
@@ -248,23 +249,47 @@ def _find_var_from_method_context(ctx: MethodContext) -> Var | None:
 
 
 def _find_assignment_rvalue_call(
-    api: CheckerPluginInterface, var: Var
+    api: CheckerPluginInterface, var: Var, context_line: int | None
 ) -> CallExpr | None:
     from mypy.checker import TypeChecker
 
     if not isinstance(api, TypeChecker):
         return None
 
-    tree = api.tree
-    for stmt in tree.defs:
-        if not isinstance(stmt, AssignmentStmt):
-            continue
-        if not isinstance(stmt.rvalue, CallExpr):
-            continue
-        for lval in stmt.lvalues:
-            if isinstance(lval, NameExpr) and lval.node is var:
-                return stmt.rvalue
-    return None
+    def statement_lists() -> list[list[object]]:
+        out: list[list[object]] = []
+        func = api.scope.current_function()
+        if func is not None and getattr(func, "body", None) is not None:
+            body = func.body
+            if getattr(body, "body", None) is not None:
+                out.append(body.body)
+        info = api.scope.active_class()
+        if info is not None and getattr(info, "defn", None) is not None:
+            defn = info.defn
+            if isinstance(defn, ClassDef):
+                defs = getattr(defn, "defs", None)
+                if defs is not None and getattr(defs, "body", None) is not None:
+                    out.append(defs.body)
+        out.append(api.tree.defs)
+        return out
+
+    best: CallExpr | None = None
+    best_line = -1
+    for stmts in statement_lists():
+        for stmt in stmts:
+            if not isinstance(stmt, AssignmentStmt):
+                continue
+            if not isinstance(stmt.rvalue, CallExpr):
+                continue
+            stmt_line = getattr(stmt, "line", -1)
+            if context_line is not None and stmt_line > context_line:
+                continue
+            for lval in stmt.lvalues:
+                if isinstance(lval, NameExpr) and lval.node is var:
+                    if stmt_line >= best_line:
+                        best = stmt.rvalue
+                        best_line = stmt_line
+    return best
 
 
 def _extract_pattern_from_call(call: CallExpr) -> str | bytes | None:
@@ -282,7 +307,8 @@ def _extract_pattern_from_call(call: CallExpr) -> str | bytes | None:
 
 
 def _resolve_pattern_for_var(ctx: MethodContext, var: Var) -> PatternInfo | None:
-    call = _find_assignment_rvalue_call(ctx.api, var)
+    context_line = getattr(ctx.context, "line", None)
+    call = _find_assignment_rvalue_call(ctx.api, var, context_line)
     if call is None:
         return None
 
@@ -449,21 +475,38 @@ def _resolve_match_pattern(ctx: MethodContext) -> PatternInfo | None:
     if var is None:
         return None
 
-    call = _find_assignment_rvalue_call(ctx.api, var)
+    context_line = getattr(ctx.context, "line", None)
+    call = _find_assignment_rvalue_call(ctx.api, var, context_line)
     if call is None:
         return None
 
     callee = call.callee
-    fullname: str | None = None
-    if isinstance(callee, RefExpr):
-        fullname = callee.fullname
 
-    if fullname is None:
+    if isinstance(callee, MemberExpr) and callee.name in ("match", "search", "fullmatch"):
+        if callee.fullname in ("re.match", "re.search", "re.fullmatch"):
+            if call.args and isinstance(call.args[0], (StrExpr, BytesExpr)):
+                return analyze_pattern(call.args[0].value)
+            return None
+
+        receiver = callee.expr
+        if isinstance(receiver, NameExpr) and isinstance(receiver.node, Var):
+            info = _resolve_pattern_for_var(ctx, receiver.node)
+            if info is not None and info.is_valid:
+                return info
+            return None
+        if isinstance(receiver, CallExpr):
+            recv_callee = receiver.callee
+            if isinstance(recv_callee, RefExpr) and recv_callee.fullname == "re.compile":
+                if receiver.args and isinstance(receiver.args[0], (StrExpr, BytesExpr)):
+                    info = analyze_pattern(receiver.args[0].value)
+                    return info if info.is_valid else None
         return None
 
-    if fullname in ("re.match", "re.search", "re.fullmatch"):
-        if call.args and isinstance(call.args[0], StrExpr):
-            return analyze_pattern(call.args[0].value)
+    if isinstance(callee, RefExpr):
+        fullname = callee.fullname
+        if fullname in ("re.match", "re.search", "re.fullmatch"):
+            if call.args and isinstance(call.args[0], (StrExpr, BytesExpr)):
+                return analyze_pattern(call.args[0].value)
         return None
 
     return None

@@ -309,6 +309,45 @@ parts = re.split(rb"\d+", b"abc123def456")
 reveal_type(parts)  # N: Revealed type is "builtins.list[builtins.bytes]"
 [builtins fixtures/tuple.pyi]
 
+[case testRePatternSubInFunctionTracksPattern]
+import re
+
+def f() -> None:
+    pat = re.compile(r"(\w+)")
+    pat.sub(r"\2", "hello")  # E: Replacement references group 2, but pattern only has 1 group(s)
+
+f()
+[builtins fixtures/tuple.pyi]
+
+[case testReMatchFromPatternMatchGroupValidation]
+import re
+
+pat = re.compile(r"(?P<name>\w+) (?P<age>\d+)")
+m = pat.match("alice 30")
+if m:
+    m.group("name")
+    m.group("naem")  # E: Regex pattern has no group named "naem"; pattern has groups: ['age', 'name']
+    m.group(3)  # E: Regex group index 3 is out of range (pattern has 2 groups)
+[builtins fixtures/tuple.pyi]
+
+[case testReMatchFromInlineCompileMatchGroupValidation]
+import re
+
+m = re.compile(r"(?P<word>\w+)").match("hello")
+if m:
+    m.group("word")
+    m.group("missing")  # E: Regex pattern has no group named "missing"; pattern has groups: ['word']
+[builtins fixtures/tuple.pyi]
+
+[case testRePatternSubInClassBodyTracksPattern]
+import re
+
+class C:
+    pat = re.compile(r"(\w+)")
+    x = pat.sub(r"\2", "hello")  # E: Replacement references group 2, but pattern only has 1 group(s)
+
+[builtins fixtures/tuple.pyi]
+
 [case testReIncrementalPatternUpdate]
 import m
 
