@@ -1,0 +1,310 @@
+[case testReCompileValidPattern]
+import re
+pat = re.compile(r"\d+")
+[builtins fixtures/tuple.pyi]
+
+[case testReCompileInvalidPattern]
+import re
+pat = re.compile(r"(unclosed group")  # E: Invalid regex pattern: missing ), unterminated subpattern at position 0
+[builtins fixtures/tuple.pyi]
+
+[case testReCompileInvalidPatternBadCharRange]
+import re
+pat = re.compile(r"[z-a]")  # E: Invalid regex pattern: bad character range z-a at position 1
+[builtins fixtures/tuple.pyi]
+
+[case testReSearchInvalidPattern]
+import re
+m = re.search(r"(?P<name>unclosed", "text")  # E: Invalid regex pattern: missing ), unterminated subpattern at position 0
+[builtins fixtures/tuple.pyi]
+
+[case testReMatchInvalidPattern]
+import re
+m = re.match(r"*invalid", "text")  # E: Invalid regex pattern: nothing to repeat at position 0
+[builtins fixtures/tuple.pyi]
+
+[case testReFullmatchInvalidPattern]
+import re
+m = re.fullmatch(r"+invalid", "text")  # E: Invalid regex pattern: nothing to repeat at position 0
+[builtins fixtures/tuple.pyi]
+
+[case testReFindallInvalidPattern]
+import re
+results = re.findall(r"(unclosed", "text")  # E: Invalid regex pattern: missing ), unterminated subpattern at position 0
+[builtins fixtures/tuple.pyi]
+
+[case testReFinditerInvalidPattern]
+import re
+it = re.finditer(r"(unclosed", "text")  # E: Invalid regex pattern: missing ), unterminated subpattern at position 0
+[builtins fixtures/tuple.pyi]
+
+[case testReSplitInvalidPattern]
+import re
+parts = re.split(r"(unclosed", "text")  # E: Invalid regex pattern: missing ), unterminated subpattern at position 0
+[builtins fixtures/tuple.pyi]
+
+[case testReSubInvalidPattern]
+import re
+result = re.sub(r"(unclosed", "repl", "text")  # E: Invalid regex pattern: missing ), unterminated subpattern at position 0
+[builtins fixtures/tuple.pyi]
+
+[case testReSubnInvalidPattern]
+import re
+result = re.subn(r"(unclosed", "repl", "text")  # E: Invalid regex pattern: missing ), unterminated subpattern at position 0
+[builtins fixtures/tuple.pyi]
+
+[case testReFindallZeroGroups]
+import re
+results = re.findall(r"\d+", "abc 123 def 456")
+reveal_type(results)  # N: Revealed type is "builtins.list[builtins.str]"
+[builtins fixtures/tuple.pyi]
+
+[case testReFindallOneGroup]
+import re
+results = re.findall(r"(\d+)", "abc 123 def 456")
+reveal_type(results)  # N: Revealed type is "builtins.list[builtins.str]"
+[builtins fixtures/tuple.pyi]
+
+[case testReFindallTwoGroups]
+import re
+results = re.findall(r"(\w+)@(\w+)", "user@host")
+reveal_type(results)  # N: Revealed type is "builtins.list[tuple[builtins.str, builtins.str]]"
+[builtins fixtures/tuple.pyi]
+
+[case testReFindallThreeGroups]
+import re
+results = re.findall(r"(\d+)-(\d+)-(\d+)", "2025-01-01")
+reveal_type(results)  # N: Revealed type is "builtins.list[tuple[builtins.str, builtins.str, builtins.str]]"
+[builtins fixtures/tuple.pyi]
+
+[case testReFindallNonLiteralFallback]
+import re
+pattern: str
+results = re.findall(pattern, "text")
+reveal_type(results)  # N: Revealed type is "builtins.list[Any]"
+[builtins fixtures/tuple.pyi]
+
+[case testReSubValidBackreference]
+import re
+result = re.sub(r"(\w+)", r"\1!", "hello")
+[builtins fixtures/tuple.pyi]
+
+[case testReSubInvalidNumericBackreference]
+import re
+result = re.sub(r"(\w+)", r"\2", "hello")  # E: Replacement references group 2, but pattern only has 1 group(s)
+[builtins fixtures/tuple.pyi]
+
+[case testReSubInvalidNamedBackreference]
+import re
+result = re.sub(r"(?P<name>\w+)", r"\g<missing>", "hello")  # E: Replacement references unknown group name "missing"; pattern has groups: ['name']
+[builtins fixtures/tuple.pyi]
+
+[case testReSubValidNamedBackreference]
+import re
+result = re.sub(r"(?P<name>\w+)", r"\g<name>!", "hello")
+[builtins fixtures/tuple.pyi]
+
+[case testReSubnInvalidBackreference]
+import re
+result = re.subn(r"(\w+)", r"\3", "hello")  # E: Replacement references group 3, but pattern only has 1 group(s)
+[builtins fixtures/tuple.pyi]
+
+[case testReSubInvalidNumericNamedRef]
+import re
+result = re.sub(r"(\w+)", r"\g<5>", "hello")  # E: Replacement references group 5, but pattern only has 1 group(s)
+[builtins fixtures/tuple.pyi]
+
+[case testReNonLiteralPatternNoError]
+import re
+pat: str
+re.compile(pat)
+re.match(pat, "text")
+re.search(pat, "text")
+re.findall(pat, "text")
+re.sub(pat, "repl", "text")
+[builtins fixtures/tuple.pyi]
+
+[case testReValidPatternsNoErrors]
+import re
+re.compile(r"hello")
+re.compile(r"\d{3}-\d{4}")
+re.compile(r"(?:non-capturing)")
+re.compile(r"(?P<named>\w+)")
+re.compile(r"a|b|c")
+re.compile(r"^start.*end$")
+[builtins fixtures/tuple.pyi]
+
+[case testReFindallBytePatternZeroGroups]
+import re
+results = re.findall(rb"\d+", b"abc 123")
+reveal_type(results)  # N: Revealed type is "builtins.list[builtins.bytes]"
+[builtins fixtures/tuple.pyi]
+
+[case testReFindallBytePatternTwoGroups]
+import re
+results = re.findall(rb"(\w+)@(\w+)", b"user@host")
+reveal_type(results)  # N: Revealed type is "builtins.list[tuple[builtins.bytes, builtins.bytes]]"
+[builtins fixtures/tuple.pyi]
+
+[case testReSplitWithGroups]
+import re
+parts = re.split(r"(\d+)", "abc123def456")
+reveal_type(parts)  # N: Revealed type is "builtins.list[builtins.str | None]"
+[builtins fixtures/tuple.pyi]
+
+[case testReSplitWithoutGroups]
+import re
+parts = re.split(r"\d+", "abc123def456")
+reveal_type(parts)  # N: Revealed type is "builtins.list[builtins.str]"
+[builtins fixtures/tuple.pyi]
+
+[case testReSplitBytesWithGroups]
+import re
+parts = re.split(rb"(\d+)", b"abc123def456")
+reveal_type(parts)  # N: Revealed type is "builtins.list[builtins.bytes | None]"
+[builtins fixtures/tuple.pyi]
+
+[case testReSubMultipleInvalidBackreferences]
+import re
+result = re.sub(r"(\w+)", r"\2 and \3", "hello")  # E: Replacement references group 2, but pattern only has 1 group(s) \
+                                                   # E: Replacement references group 3, but pattern only has 1 group(s)
+[builtins fixtures/tuple.pyi]
+
+[case testReSubZeroGroupsBackref]
+import re
+result = re.sub(r"\w+", r"\1", "hello")  # E: Replacement references group 1, but pattern only has 0 group(s)
+[builtins fixtures/tuple.pyi]
+
+[case testReSubEscapedBackslashNotFlagged]
+import re
+result = re.sub(r"(\w+)", r"\\1", "hello")
+[builtins fixtures/tuple.pyi]
+
+[case testReSubMixedValidInvalidRefs]
+import re
+result = re.sub(r"(?P<first>\w+) (?P<second>\w+)", r"\g<first> \g<third>", "hello world")  # E: Replacement references unknown group name "third"; pattern has groups: ['first', 'second']
+[builtins fixtures/tuple.pyi]
+
+[case testReMatchGroupInvalidStringName]
+import re
+m = re.match(r"(?P<name>\w+) (?P<age>\d+)", "alice 30")
+if m:
+    m.group("name")
+    m.group("age")
+    m.group("nonexist")  # E: Regex pattern has no group named "nonexist"; pattern has groups: ['age', 'name']
+[builtins fixtures/tuple.pyi]
+
+[case testReMatchGroupInvalidIndex]
+import re
+m = re.match(r"(\w+) (\d+)", "alice 30")
+if m:
+    m.group(1)
+    m.group(2)
+    m.group(3)  # E: Regex group index 3 is out of range (pattern has 2 groups)
+[builtins fixtures/tuple.pyi]
+
+[case testReMatchGroupZeroAlwaysValid]
+import re
+m = re.match(r"(\w+)", "alice")
+if m:
+    m.group(0)
+    m.group()
+[builtins fixtures/tuple.pyi]
+
+[case testReMatchGroupNonLiteralNoError]
+import re
+m = re.match(r"(\w+)", "alice")
+idx: int
+name: str
+if m:
+    m.group(idx)
+    m.group(name)
+[builtins fixtures/tuple.pyi]
+
+[case testReSearchGroupValidation]
+import re
+m = re.search(r"(?P<year>\d{4})-(?P<month>\d{2})-(?P<day>\d{2})", "2025-01-15")
+if m:
+    m.group("year")
+    m.group("month")
+    m.group("day")
+    m.group("hour")  # E: Regex pattern has no group named "hour"; pattern has groups: ['day', 'month', 'year']
+    m.group(4)  # E: Regex group index 4 is out of range (pattern has 3 groups)
+[builtins fixtures/tuple.pyi]
+
+[case testReFullmatchGroupValidation]
+import re
+m = re.fullmatch(r"(?P<proto>\w+)://(?P<host>[^/]+)", "https://example.com")
+if m:
+    m.group("proto")
+    m.group("host")
+    m.group("path")  # E: Regex pattern has no group named "path"; pattern has groups: ['host', 'proto']
+[builtins fixtures/tuple.pyi]
+
+[case testReMatchGetitemValidation]
+import re
+m = re.match(r"(?P<name>\w+)", "alice")
+if m:
+    m[0]
+    m[1]
+    m["name"]
+    m[2]  # E: Regex group index 2 is out of range (pattern has 1 groups)
+    m["missing"]  # E: Regex pattern has no group named "missing"; pattern has groups: ['name']
+[builtins fixtures/tuple.pyi]
+
+[case testReFindallFourGroups]
+import re
+results = re.findall(r"(\d+)\.(\d+)\.(\d+)\.(\d+)", "192.168.1.1")
+reveal_type(results)  # N: Revealed type is "builtins.list[tuple[builtins.str, builtins.str, builtins.str, builtins.str]]"
+[builtins fixtures/tuple.pyi]
+
+[case testRePatternSubInvalidBackreference]
+import re
+pat = re.compile(r"(\w+)")
+result = pat.sub(r"\2", "hello")  # E: Replacement references group 2, but pattern only has 1 group(s)
+[builtins fixtures/tuple.pyi]
+
+[case testRePatternSubnInvalidBackreference]
+import re
+pat = re.compile(r"(\w+)")
+result = pat.subn(r"\2", "hello")  # E: Replacement references group 2, but pattern only has 1 group(s)
+[builtins fixtures/tuple.pyi]
+
+[case testRePatternSubValidBackreference]
+import re
+pat = re.compile(r"(\w+)")
+result = pat.sub(r"\1!", "hello")
+[builtins fixtures/tuple.pyi]
+
+[case testRePatternMethodInvalidPattern]
+import re
+pat = re.compile(r"[z-a]")  # E: Invalid regex pattern: bad character range z-a at position 1
+[builtins fixtures/tuple.pyi]
+
+[case testReFindallNamedAndNumberedGroups]
+import re
+results = re.findall(r"(?P<user>\w+)@(?P<domain>\w+)\.(\w+)", "user@host.com")
+reveal_type(results)  # N: Revealed type is "builtins.list[tuple[builtins.str, builtins.str, builtins.str]]"
+[builtins fixtures/tuple.pyi]
+
+[case testReSubNamedAndNumericMixed]
+import re
+result = re.sub(r"(?P<a>\w+) (\w+)", r"\g<a> \2", "hello world")
+[builtins fixtures/tuple.pyi]
+
+[case testReSubNamedNumericOutOfRange]
+import re
+result = re.sub(r"(?P<a>\w+) (\w+)", r"\g<a> \3", "hello world")  # E: Replacement references group 3, but pattern only has 2 group(s)
+[builtins fixtures/tuple.pyi]
+
+[case testRePatternSubNamedInvalid]
+import re
+pat = re.compile(r"(?P<first>\w+) (?P<second>\w+)")
+result = pat.sub(r"\g<third>", "hello world")  # E: Replacement references unknown group name "third"; pattern has groups: ['first', 'second']
+[builtins fixtures/tuple.pyi]
+
+[case testReSplitBytePatternWithoutGroups]
+import re
+parts = re.split(rb"\d+", b"abc123def456")
+reveal_type(parts)  # N: Revealed type is "builtins.list[builtins.bytes]"
+[builtins fixtures/tuple.pyi]

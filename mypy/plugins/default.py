@@ -55,6 +55,19 @@ from mypy.plugins.functools import (
     partial_call_callback,
     partial_new_callback,
 )
+from mypy.plugins.re_module import (
+    match_getitem_callback,
+    match_group_callback,
+    re_compile_callback,
+    re_findall_callback,
+    re_match_callback,
+    re_pattern_findall_callback,
+    re_pattern_sub_callback,
+    re_pattern_subn_callback,
+    re_split_callback,
+    re_sub_callback,
+    re_subn_callback,
+)
 from mypy.plugins.singledispatch import (
     call_singledispatch_function_after_register_argument,
     call_singledispatch_function_callback,
@@ -107,6 +120,20 @@ class DefaultPlugin(Plugin):
             return enum_member_callback
         elif fullname == "builtins.len":
             return len_callback
+        elif fullname == "re.compile":
+            return re_compile_callback
+        elif fullname in ("re.match", "re.search", "re.fullmatch"):
+            return re_match_callback
+        elif fullname == "re.findall":
+            return re_findall_callback
+        elif fullname == "re.sub":
+            return re_sub_callback
+        elif fullname == "re.subn":
+            return re_subn_callback
+        elif fullname == "re.split":
+            return re_split_callback
+        elif fullname == "re.finditer":
+            return re_match_callback
         return None
 
     def get_function_signature_hook(
@@ -164,6 +191,18 @@ class DefaultPlugin(Plugin):
             return call_singledispatch_function_after_register_argument
         elif fullname == "functools.partial.__call__":
             return partial_call_callback
+        elif fullname == "re.Pattern.findall":
+            return re_pattern_findall_callback
+        elif fullname == "re.Match.group":
+            return match_group_callback
+        elif fullname == "re.Match.__getitem__":
+            return match_getitem_callback
+        elif fullname in ("re.Pattern.match", "re.Pattern.search", "re.Pattern.fullmatch"):
+            return re_match_callback
+        elif fullname == "re.Pattern.sub":
+            return re_pattern_sub_callback
+        elif fullname == "re.Pattern.subn":
+            return re_pattern_subn_callback
         return None
 
     def get_attribute_hook(self, fullname: str) -> Callable[[AttributeContext], Type] | None:

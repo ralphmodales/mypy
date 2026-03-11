@@ -84,6 +84,23 @@ ASYNC_WITH_OUTSIDE_COROUTINE: Final = '"async with" outside async function'
 INCOMPATIBLE_TYPES_IN_YIELD: Final = ErrorMessage('Incompatible types in "yield"')
 INCOMPATIBLE_TYPES_IN_YIELD_FROM: Final = ErrorMessage('Incompatible types in "yield from"')
 INCOMPATIBLE_TYPES_IN_STR_INTERPOLATION: Final = "Incompatible types in string interpolation"
+
+INVALID_RE_PATTERN: Final = ErrorMessage(
+    "Invalid regex pattern: {}", codes.RE_PATTERN
+)
+INVALID_RE_GROUP_NAME: Final = ErrorMessage(
+    'Regex pattern has no group named "{}"; pattern has groups: {}', codes.RE_GROUP
+)
+INVALID_RE_GROUP_INDEX: Final = ErrorMessage(
+    "Regex group index {} is out of range (pattern has {} groups)", codes.RE_GROUP
+)
+INVALID_RE_REPLACEMENT_REF: Final = ErrorMessage(
+    "Replacement references group {}, but pattern only has {} group(s)", codes.RE_GROUP
+)
+INVALID_RE_REPLACEMENT_NAME: Final = ErrorMessage(
+    'Replacement references unknown group name "{}"; pattern has groups: {}', codes.RE_GROUP
+)
+
 INCOMPATIBLE_TYPES_IN_CAPTURE: Final = ErrorMessage("Incompatible types in capture pattern")
 MUST_HAVE_NONE_RETURN_TYPE: Final = ErrorMessage('The return type of "{}" must be None')
 TUPLE_INDEX_OUT_OF_RANGE: Final = ErrorMessage("Tuple index out of range")
