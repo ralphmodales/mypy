@@ -348,6 +348,37 @@ class C:
 
 [builtins fixtures/tuple.pyi]
 
+[case testReFlagsVerboseAffectValidation]
+import re
+
+re.compile(r"#)")  # E: Invalid regex pattern: unbalanced parenthesis at position 1
+re.compile(r"#)", re.VERBOSE)
+re.compile(r"#)", flags=re.VERBOSE)
+re.match(r"#)", "x", re.VERBOSE)
+[builtins fixtures/tuple.pyi]
+
+[case testRePatternMatchDoesNotValidateStringArgument]
+import re
+
+pat = re.compile(r"\w+")
+pat.match("(")
+[builtins fixtures/tuple.pyi]
+
+[case testReInlineCompileSubIsTraced]
+import re
+
+re.compile(r"(a)").sub(r"\2", "a")  # E: Replacement references group 2, but pattern only has 1 group(s)
+[builtins fixtures/tuple.pyi]
+
+[case testReSubOctalEscapesAreNotGroupRefs]
+import re
+
+re.sub(r"(a)", r"\07", "a")
+re.sub(r"(a)", r"\0", "a")
+re.sub(r"(a)", r"\011", "a")
+re.sub(r"(a)", r"\11", "a")  # E: Replacement references group 11, but pattern only has 1 group(s)
+[builtins fixtures/tuple.pyi]
+
 [case testReIncrementalPatternUpdate]
 import m
 

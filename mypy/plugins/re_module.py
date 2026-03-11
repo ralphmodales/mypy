@@ -9,11 +9,15 @@ from mypy.nodes import (
     BytesExpr,
     CallExpr,
     ClassDef,
+    Expression,
     IndexExpr,
+    IntExpr,
     MemberExpr,
     NameExpr,
+    OpExpr,
     RefExpr,
     StrExpr,
+    UnaryExpr,
     Var,
 )
 from mypy.plugin import CheckerPluginInterface, FunctionContext, MethodContext
@@ -21,21 +25,52 @@ from mypy.typeops import try_getting_int_literals_from_type, try_getting_str_lit
 from mypy.types import Instance, NoneType, TupleType, Type, UnionType, get_proper_type
 
 
-_ESCAPED_BACKSLASH_RE: Final = stdlib_re.compile(r"\\\\")
-_NUMERIC_BACKREF_RE: Final = stdlib_re.compile(r"\\(\d+)")
-_NAMED_BACKREF_RE: Final = stdlib_re.compile(r"\\g<([^>]+)>")
+_RE_FUNC_FULLNAMES: Final = frozenset(
+    {
+        "re.compile",
+        "re.match",
+        "re.search",
+        "re.fullmatch",
+        "re.findall",
+        "re.finditer",
+        "re.sub",
+        "re.subn",
+        "re.split",
+    }
+)
 
-_RE_FUNC_FULLNAMES: Final = frozenset({
-    "re.compile",
-    "re.match",
-    "re.search",
-    "re.fullmatch",
-    "re.findall",
-    "re.finditer",
-    "re.sub",
-    "re.subn",
-    "re.split",
-})
+_FLAG_FULLNAMES: Final[dict[str, int]] = {
+    "re.A": stdlib_re.A,
+    "re.ASCII": stdlib_re.ASCII,
+    "re.DEBUG": stdlib_re.DEBUG,
+    "re.I": stdlib_re.I,
+    "re.IGNORECASE": stdlib_re.IGNORECASE,
+    "re.L": stdlib_re.L,
+    "re.LOCALE": stdlib_re.LOCALE,
+    "re.M": stdlib_re.M,
+    "re.MULTILINE": stdlib_re.MULTILINE,
+    "re.S": stdlib_re.S,
+    "re.DOTALL": stdlib_re.DOTALL,
+    "re.U": stdlib_re.U,
+    "re.UNICODE": stdlib_re.UNICODE,
+    "re.X": stdlib_re.X,
+    "re.VERBOSE": stdlib_re.VERBOSE,
+    "re.RegexFlag.A": stdlib_re.A,
+    "re.RegexFlag.ASCII": stdlib_re.ASCII,
+    "re.RegexFlag.DEBUG": stdlib_re.DEBUG,
+    "re.RegexFlag.I": stdlib_re.I,
+    "re.RegexFlag.IGNORECASE": stdlib_re.IGNORECASE,
+    "re.RegexFlag.L": stdlib_re.L,
+    "re.RegexFlag.LOCALE": stdlib_re.LOCALE,
+    "re.RegexFlag.M": stdlib_re.M,
+    "re.RegexFlag.MULTILINE": stdlib_re.MULTILINE,
+    "re.RegexFlag.S": stdlib_re.S,
+    "re.RegexFlag.DOTALL": stdlib_re.DOTALL,
+    "re.RegexFlag.U": stdlib_re.U,
+    "re.RegexFlag.UNICODE": stdlib_re.UNICODE,
+    "re.RegexFlag.X": stdlib_re.X,
+    "re.RegexFlag.VERBOSE": stdlib_re.VERBOSE,
+}
 
 
 class PatternInfo(NamedTuple):
@@ -45,15 +80,16 @@ class PatternInfo(NamedTuple):
     error_msg: str | None
 
 
-_PATTERN_ANALYSIS_CACHE: dict[str | bytes, PatternInfo] = {}
+_PATTERN_ANALYSIS_CACHE: dict[tuple[str | bytes, int], PatternInfo] = {}
 
 
-def analyze_pattern(pattern: str | bytes) -> PatternInfo:
-    cached = _PATTERN_ANALYSIS_CACHE.get(pattern)
+def analyze_pattern(pattern: str | bytes, flags: int) -> PatternInfo:
+    key = (pattern, flags)
+    cached = _PATTERN_ANALYSIS_CACHE.get(key)
     if cached is not None:
         return cached
     try:
-        compiled = stdlib_re.compile(pattern)
+        compiled = stdlib_re.compile(pattern, flags)
         info = PatternInfo(
             group_count=compiled.groups,
             named_groups=dict(compiled.groupindex),
@@ -67,7 +103,7 @@ def analyze_pattern(pattern: str | bytes) -> PatternInfo:
             is_valid=False,
             error_msg=str(e),
         )
-    _PATTERN_ANALYSIS_CACHE[pattern] = info
+    _PATTERN_ANALYSIS_CACHE[key] = info
     return info
 
 
@@ -122,8 +158,75 @@ def _get_element_type(ctx: FunctionContext | MethodContext, is_bytes: bool) -> T
     return ctx.api.named_generic_type("builtins.str", [])
 
 
+def _formal_index(ctx: FunctionContext, name: str) -> int | None:
+    for i, n in enumerate(ctx.callee_arg_names):
+        if n == name:
+            return i
+    return None
+
+
+def _try_eval_flags_expr(expr: Expression) -> int | None:
+    if isinstance(expr, IntExpr):
+        return expr.value
+
+    if isinstance(expr, UnaryExpr) and expr.op == "-" and isinstance(expr.expr, IntExpr):
+        return -expr.expr.value
+
+    if isinstance(expr, OpExpr) and expr.op in {"|", "&", "^"}:
+        left = _try_eval_flags_expr(expr.left)
+        right = _try_eval_flags_expr(expr.right)
+        if left is None or right is None:
+            return None
+        if expr.op == "|":
+            return left | right
+        if expr.op == "&":
+            return left & right
+        return left ^ right
+
+    if isinstance(expr, RefExpr):
+        if expr.fullname in _FLAG_FULLNAMES:
+            return _FLAG_FULLNAMES[expr.fullname]
+
+    if isinstance(expr, MemberExpr):
+        if expr.fullname in _FLAG_FULLNAMES:
+            return _FLAG_FULLNAMES[expr.fullname]
+
+    return None
+
+
+def _ref_fullname(expr: Expression) -> str | None:
+    if isinstance(expr, RefExpr) and expr.fullname:
+        return expr.fullname
+    if isinstance(expr, MemberExpr) and expr.fullname:
+        return expr.fullname
+    return None
+
+
+def _is_re_compile_callee(expr: Expression) -> bool:
+    fullname = _ref_fullname(expr)
+    if fullname == "re.compile":
+        return True
+    if isinstance(expr, MemberExpr) and expr.name == "compile":
+        if isinstance(expr.expr, NameExpr) and expr.expr.fullname == "re":
+            return True
+    return False
+
+
+def _flags_from_ctx(ctx: FunctionContext) -> int | None:
+    idx = _formal_index(ctx, "flags")
+    if idx is None:
+        return 0
+    if idx >= len(ctx.args) or not ctx.args[idx]:
+        return 0
+    flags_expr = ctx.args[idx][0]
+    v = _try_eval_flags_expr(flags_expr)
+    return v
+
+
 def _report_invalid_pattern(
-    ctx: FunctionContext | MethodContext, info: PatternInfo, arg_index: int
+    ctx: FunctionContext | MethodContext,
+    info: PatternInfo,
+    arg_index: int,
 ) -> None:
     if not info.is_valid and arg_index < len(ctx.args) and ctx.args[arg_index]:
         ctx.api.fail(
@@ -132,8 +235,53 @@ def _report_invalid_pattern(
         )
 
 
-def _strip_escaped_backslashes(repl: str) -> str:
-    return _ESCAPED_BACKSLASH_RE.sub("", repl)
+def _iter_replacement_refs(repl: str) -> tuple[list[int], list[str]]:
+    numeric: list[int] = []
+    named: list[str] = []
+    i = 0
+    n = len(repl)
+    while i < n:
+        c = repl[i]
+        if c != "\\":
+            i += 1
+            continue
+        if i + 1 >= n:
+            break
+        nxt = repl[i + 1]
+        if nxt == "\\":
+            i += 2
+            continue
+        if nxt == "g" and i + 2 < n and repl[i + 2] == "<":
+            j = i + 3
+            while j < n and repl[j] != ">":
+                j += 1
+            if j >= n:
+                i += 2
+                continue
+            name = repl[i + 3 : j]
+            if name.isdigit():
+                numeric.append(int(name))
+            else:
+                named.append(name)
+            i = j + 1
+            continue
+        if nxt.isdigit():
+            if nxt == "0":
+                j = i + 2
+                k = 0
+                while j < n and k < 2 and repl[j] in "01234567":
+                    j += 1
+                    k += 1
+                i = j
+                continue
+            j = i + 1
+            while j < n and repl[j].isdigit():
+                j += 1
+            numeric.append(int(repl[i + 1 : j]))
+            i = j
+            continue
+        i += 2
+    return numeric, named
 
 
 def _validate_replacement_refs(
@@ -142,10 +290,9 @@ def _validate_replacement_refs(
     info: PatternInfo,
     repl_arg_index: int,
 ) -> None:
-    cleaned = _strip_escaped_backslashes(repl)
+    nums, names = _iter_replacement_refs(repl)
 
-    for m in _NUMERIC_BACKREF_RE.finditer(cleaned):
-        group_num = int(m.group(1))
+    for group_num in nums:
         if group_num == 0:
             continue
         if group_num > info.group_count:
@@ -156,20 +303,8 @@ def _validate_replacement_refs(
                 ctx.args[repl_arg_index][0],
             )
 
-    for m in _NAMED_BACKREF_RE.finditer(cleaned):
-        name = m.group(1)
-        if name.isdigit():
-            group_num = int(name)
-            if group_num == 0:
-                continue
-            if group_num > info.group_count:
-                ctx.api.fail(
-                    message_registry.INVALID_RE_REPLACEMENT_REF.format(
-                        group_num, info.group_count
-                    ),
-                    ctx.args[repl_arg_index][0],
-                )
-        elif name not in info.named_groups:
+    for name in names:
+        if name not in info.named_groups:
             ctx.api.fail(
                 message_registry.INVALID_RE_REPLACEMENT_NAME.format(
                     name, sorted(info.named_groups)
@@ -248,6 +383,18 @@ def _find_var_from_method_context(ctx: MethodContext) -> Var | None:
     return None
 
 
+def _find_name_from_method_context(ctx: MethodContext) -> str | None:
+    context = ctx.context
+    if isinstance(context, CallExpr):
+        callee = context.callee
+        if isinstance(callee, MemberExpr) and isinstance(callee.expr, NameExpr):
+            return callee.expr.name
+    elif isinstance(context, IndexExpr):
+        if isinstance(context.base, NameExpr):
+            return context.base.name
+    return None
+
+
 def _find_assignment_rvalue_call(
     api: CheckerPluginInterface, var: Var, context_line: int | None
 ) -> CallExpr | None:
@@ -292,38 +439,220 @@ def _find_assignment_rvalue_call(
     return best
 
 
-def _extract_pattern_from_call(call: CallExpr) -> str | bytes | None:
-    callee = call.callee
-    fullname: str | None = None
-    if isinstance(callee, RefExpr):
-        fullname = callee.fullname
-    if fullname is None:
+def _find_assignment_rvalue_call_by_name(
+    api: CheckerPluginInterface, name: str, context_line: int | None
+) -> CallExpr | None:
+    from mypy.checker import TypeChecker
+
+    if not isinstance(api, TypeChecker):
         return None
-    if fullname not in _RE_FUNC_FULLNAMES:
+
+    def statement_lists() -> list[list[object]]:
+        out: list[list[object]] = []
+        func = api.scope.current_function()
+        if func is not None and getattr(func, "body", None) is not None:
+            body = func.body
+            if getattr(body, "body", None) is not None:
+                out.append(body.body)
+        info = api.scope.active_class()
+        if info is not None and getattr(info, "defn", None) is not None:
+            defn = info.defn
+            if isinstance(defn, ClassDef):
+                defs = getattr(defn, "defs", None)
+                if defs is not None and getattr(defs, "body", None) is not None:
+                    out.append(defs.body)
+        out.append(api.tree.defs)
+        return out
+
+    best: CallExpr | None = None
+    best_line = -1
+    for stmts in statement_lists():
+        for stmt in stmts:
+            if not isinstance(stmt, AssignmentStmt):
+                continue
+            if not isinstance(stmt.rvalue, CallExpr):
+                continue
+            stmt_line = getattr(stmt, "line", -1)
+            if context_line is not None and stmt_line > context_line:
+                continue
+            for lval in stmt.lvalues:
+                if isinstance(lval, NameExpr) and lval.name == name:
+                    if stmt_line >= best_line:
+                        best = stmt.rvalue
+                        best_line = stmt_line
+    return best
+
+
+def _extract_pattern_flags_from_call(call: CallExpr) -> tuple[str | bytes, int] | None:
+    callee_fullname = _ref_fullname(call.callee)
+    if callee_fullname is None or callee_fullname not in _RE_FUNC_FULLNAMES:
         return None
-    if call.args and isinstance(call.args[0], (StrExpr, BytesExpr)):
-        return call.args[0].value
+
+    if not call.args or not isinstance(call.args[0], (StrExpr, BytesExpr)):
+        return None
+    pattern = call.args[0].value
+
+    flags_expr: Expression | None = None
+    for arg, name in zip(call.args, call.arg_names):
+        if name == "flags":
+            flags_expr = arg
+            break
+    if flags_expr is None:
+        if len(call.args) >= 3 and call.arg_names[2] is None and callee_fullname in {
+            "re.match",
+            "re.search",
+            "re.fullmatch",
+            "re.findall",
+            "re.finditer",
+            "re.split",
+        }:
+            flags_expr = call.args[2]
+        elif len(call.args) >= 5 and call.arg_names[4] is None and callee_fullname in {
+            "re.sub",
+            "re.subn",
+        }:
+            flags_expr = call.args[4]
+        elif len(call.args) >= 2 and call.arg_names[1] is None and callee_fullname == "re.compile":
+            flags_expr = call.args[1]
+
+    if flags_expr is None:
+        flags = 0
+    else:
+        flags_val = _try_eval_flags_expr(flags_expr)
+        if flags_val is None:
+            return None
+        flags = flags_val
+
+    return pattern, flags
+
+
+def _receiver_expr_from_method_context(ctx: MethodContext) -> Expression | None:
+    if isinstance(ctx.context, CallExpr) and isinstance(ctx.context.callee, MemberExpr):
+        return ctx.context.callee.expr
     return None
 
 
-def _resolve_pattern_for_var(ctx: MethodContext, var: Var) -> PatternInfo | None:
+def _resolve_compiled_pattern_from_expr(
+    ctx: MethodContext, receiver: Expression
+) -> tuple[PatternInfo, int] | None:
     context_line = getattr(ctx.context, "line", None)
-    call = _find_assignment_rvalue_call(ctx.api, var, context_line)
+
+    if isinstance(receiver, NameExpr) and isinstance(receiver.node, Var):
+        call = _find_assignment_rvalue_call(ctx.api, receiver.node, context_line)
+        if call is None:
+            return None
+        if not _is_re_compile_callee(call.callee):
+            return None
+        if not call.args or not isinstance(call.args[0], (StrExpr, BytesExpr)):
+            return None
+        pattern = call.args[0].value
+        flags = 0
+        flags_expr: Expression | None = None
+        for arg, name in zip(call.args, call.arg_names):
+            if name == "flags":
+                flags_expr = arg
+                break
+        if flags_expr is None and len(call.args) >= 2 and call.arg_names[1] is None:
+            flags_expr = call.args[1]
+        if flags_expr is not None:
+            flags_val = _try_eval_flags_expr(flags_expr)
+            if flags_val is None:
+                return None
+            flags = flags_val
+        info = analyze_pattern(pattern, flags)
+        return info, flags
+
+    if isinstance(receiver, NameExpr) and receiver.node is None:
+        call = _find_assignment_rvalue_call_by_name(ctx.api, receiver.name, context_line)
+        if call is None:
+            return None
+        if not _is_re_compile_callee(call.callee):
+            return None
+        if not call.args or not isinstance(call.args[0], (StrExpr, BytesExpr)):
+            return None
+        pattern = call.args[0].value
+        flags = 0
+        flags_expr: Expression | None = None
+        for arg, name in zip(call.args, call.arg_names):
+            if name == "flags":
+                flags_expr = arg
+                break
+        if flags_expr is None and len(call.args) >= 2 and call.arg_names[1] is None:
+            flags_expr = call.args[1]
+        if flags_expr is not None:
+            flags_val = _try_eval_flags_expr(flags_expr)
+            if flags_val is None:
+                return None
+            flags = flags_val
+        info = analyze_pattern(pattern, flags)
+        return info, flags
+
+    if isinstance(receiver, CallExpr):
+        if not _is_re_compile_callee(receiver.callee):
+            return None
+        if not receiver.args or not isinstance(receiver.args[0], (StrExpr, BytesExpr)):
+            return None
+        pattern = receiver.args[0].value
+        flags = 0
+        flags_expr: Expression | None = None
+        for arg, name in zip(receiver.args, receiver.arg_names):
+            if name == "flags":
+                flags_expr = arg
+                break
+        if flags_expr is None and len(receiver.args) >= 2 and receiver.arg_names[1] is None:
+            flags_expr = receiver.args[1]
+        if flags_expr is not None:
+            flags_val = _try_eval_flags_expr(flags_expr)
+            if flags_val is None:
+                return None
+            flags = flags_val
+        info = analyze_pattern(pattern, flags)
+        return info, flags
+
+    return None
+
+
+def _resolve_match_pattern(ctx: MethodContext) -> PatternInfo | None:
+    context_line = getattr(ctx.context, "line", None)
+    var = _find_var_from_method_context(ctx)
+    if var is not None:
+        call = _find_assignment_rvalue_call(ctx.api, var, context_line)
+    else:
+        name = _find_name_from_method_context(ctx)
+        if name is None:
+            return None
+        call = _find_assignment_rvalue_call_by_name(ctx.api, name, context_line)
     if call is None:
         return None
 
-    pattern_str = _extract_pattern_from_call(call)
-    if pattern_str is None:
+    if isinstance(call.callee, MemberExpr) and call.callee.name in {"match", "search", "fullmatch"}:
+        fullname = call.callee.fullname
+        if fullname in {"re.match", "re.search", "re.fullmatch"}:
+            pf = _extract_pattern_flags_from_call(call)
+            if pf is None:
+                return None
+            pattern, flags = pf
+            info = analyze_pattern(pattern, flags)
+            return info if info.is_valid else None
+
+        receiver = call.callee.expr
+        resolved = _resolve_compiled_pattern_from_expr(ctx, receiver)
+        if resolved is None:
+            return None
+        info, _ = resolved
+        return info if info.is_valid else None
+
+    if isinstance(call.callee, RefExpr):
+        if call.callee.fullname in {"re.match", "re.search", "re.fullmatch"}:
+            pf = _extract_pattern_flags_from_call(call)
+            if pf is None:
+                return None
+            pattern, flags = pf
+            info = analyze_pattern(pattern, flags)
+            return info if info.is_valid else None
         return None
 
-    return analyze_pattern(pattern_str)
-
-
-def _resolve_pattern_for_method(ctx: MethodContext) -> PatternInfo | None:
-    var = _find_var_from_method_context(ctx)
-    if var is None:
-        return None
-    return _resolve_pattern_for_var(ctx, var)
+    return None
 
 
 def _validate_group_args(ctx: MethodContext, info: PatternInfo) -> None:
@@ -354,71 +683,96 @@ def _validate_group_args(ctx: MethodContext, info: PatternInfo) -> None:
                     continue
                 if idx < 0 or idx > info.group_count:
                     ctx.api.fail(
-                        message_registry.INVALID_RE_GROUP_INDEX.format(
-                            idx, info.group_count
-                        ),
+                        message_registry.INVALID_RE_GROUP_INDEX.format(idx, info.group_count),
                         arg_expr,
                     )
 
 
 def re_compile_callback(ctx: FunctionContext) -> Type:
-    pattern_str = _get_pattern_from_expr(ctx, arg_index=0)
-    if pattern_str is not None:
-        info = analyze_pattern(pattern_str)
+    pattern = _get_pattern_from_expr(ctx, arg_index=0)
+    if pattern is None:
+        return ctx.default_return_type
+
+    flags = _flags_from_ctx(ctx)
+    if flags is None:
+        return ctx.default_return_type
+
+    info = analyze_pattern(pattern, flags)
+    if not info.is_valid:
         _report_invalid_pattern(ctx, info, arg_index=0)
     return ctx.default_return_type
 
 
-def re_match_callback(ctx: FunctionContext | MethodContext) -> Type:
-    pattern_str = _get_pattern_from_expr(ctx, arg_index=0)
-    if pattern_str is not None:
-        info = analyze_pattern(pattern_str)
+def re_match_callback(ctx: FunctionContext) -> Type:
+    pattern = _get_pattern_from_expr(ctx, arg_index=0)
+    if pattern is None:
+        return ctx.default_return_type
+
+    flags = _flags_from_ctx(ctx)
+    if flags is None:
+        return ctx.default_return_type
+
+    info = analyze_pattern(pattern, flags)
+    if not info.is_valid:
         _report_invalid_pattern(ctx, info, arg_index=0)
     return ctx.default_return_type
 
 
 def re_findall_callback(ctx: FunctionContext) -> Type:
-    pattern_str = _get_pattern_from_expr(ctx, arg_index=0)
-    if pattern_str is None:
+    pattern = _get_pattern_from_expr(ctx, arg_index=0)
+    if pattern is None:
         return ctx.default_return_type
 
-    info = analyze_pattern(pattern_str)
+    flags = _flags_from_ctx(ctx)
+    if flags is None:
+        return ctx.default_return_type
+
+    info = analyze_pattern(pattern, flags)
     if not info.is_valid:
         _report_invalid_pattern(ctx, info, arg_index=0)
         return ctx.default_return_type
 
-    is_bytes = _is_bytes_pattern(ctx, arg_index=0)
-    element_type = _get_element_type(ctx, is_bytes)
+    element_type = _get_element_type(ctx, _is_bytes_pattern(ctx, arg_index=0))
     return _build_findall_type(ctx, info, element_type)
 
 
 def re_split_callback(ctx: FunctionContext) -> Type:
-    pattern_str = _get_pattern_from_expr(ctx, arg_index=0)
-    if pattern_str is None:
+    pattern = _get_pattern_from_expr(ctx, arg_index=0)
+    if pattern is None:
         return ctx.default_return_type
 
-    info = analyze_pattern(pattern_str)
+    flags = _flags_from_ctx(ctx)
+    if flags is None:
+        return ctx.default_return_type
+
+    info = analyze_pattern(pattern, flags)
     if not info.is_valid:
         _report_invalid_pattern(ctx, info, arg_index=0)
         return ctx.default_return_type
 
-    is_bytes = _is_bytes_pattern(ctx, arg_index=0)
-    element_type = _get_element_type(ctx, is_bytes)
+    element_type = _get_element_type(ctx, _is_bytes_pattern(ctx, arg_index=0))
     return _build_split_type(ctx, info, element_type)
 
 
-def re_sub_callback(ctx: FunctionContext | MethodContext) -> Type:
-    pattern_str = _get_pattern_from_expr(ctx, arg_index=0)
-    if pattern_str is not None:
-        info = analyze_pattern(pattern_str)
-        if not info.is_valid:
-            _report_invalid_pattern(ctx, info, arg_index=0)
-            return ctx.default_return_type
-        _validate_repl_for_pattern(ctx, info, repl_arg_index=1)
+def re_sub_callback(ctx: FunctionContext) -> Type:
+    pattern = _get_pattern_from_expr(ctx, arg_index=0)
+    if pattern is None:
+        return ctx.default_return_type
+
+    flags = _flags_from_ctx(ctx)
+    if flags is None:
+        return ctx.default_return_type
+
+    info = analyze_pattern(pattern, flags)
+    if not info.is_valid:
+        _report_invalid_pattern(ctx, info, arg_index=0)
+        return ctx.default_return_type
+
+    _validate_repl_for_pattern(ctx, info, repl_arg_index=1)
     return ctx.default_return_type
 
 
-def re_subn_callback(ctx: FunctionContext | MethodContext) -> Type:
+def re_subn_callback(ctx: FunctionContext) -> Type:
     return re_sub_callback(ctx)
 
 
@@ -427,19 +781,33 @@ def re_pattern_findall_callback(ctx: MethodContext) -> Type:
     if not isinstance(obj_type, Instance):
         return ctx.default_return_type
 
-    is_bytes = _is_bytes_type_from_instance(obj_type)
-    element_type = _get_element_type(ctx, is_bytes)
+    receiver = _receiver_expr_from_method_context(ctx)
+    if receiver is None:
+        return ctx.default_return_type
 
-    info = _resolve_pattern_for_method(ctx)
-    if info is not None and info.is_valid:
-        return _build_findall_type(ctx, info, element_type)
+    resolved = _resolve_compiled_pattern_from_expr(ctx, receiver)
+    if resolved is None:
+        return ctx.default_return_type
 
-    return ctx.default_return_type
+    info, _flags = resolved
+    if not info.is_valid:
+        return ctx.default_return_type
+
+    element_type = _get_element_type(ctx, _is_bytes_type_from_instance(obj_type))
+    return _build_findall_type(ctx, info, element_type)
 
 
 def re_pattern_sub_callback(ctx: MethodContext) -> Type:
-    info = _resolve_pattern_for_method(ctx)
-    if info is not None and info.is_valid:
+    receiver = _receiver_expr_from_method_context(ctx)
+    if receiver is None:
+        return ctx.default_return_type
+
+    resolved = _resolve_compiled_pattern_from_expr(ctx, receiver)
+    if resolved is None:
+        return ctx.default_return_type
+
+    info, _flags = resolved
+    if info.is_valid:
         _validate_repl_for_pattern(ctx, info, repl_arg_index=0)
     return ctx.default_return_type
 
@@ -448,12 +816,34 @@ def re_pattern_subn_callback(ctx: MethodContext) -> Type:
     return re_pattern_sub_callback(ctx)
 
 
+def re_pattern_match_callback(ctx: MethodContext) -> Type:
+    receiver = _receiver_expr_from_method_context(ctx)
+    if receiver is None:
+        return ctx.default_return_type
+
+    resolved = _resolve_compiled_pattern_from_expr(ctx, receiver)
+    if resolved is None:
+        return ctx.default_return_type
+
+    info, _flags = resolved
+    if info.is_valid:
+        return ctx.default_return_type
+
+    if isinstance(receiver, CallExpr) and receiver.args:
+        if isinstance(receiver.args[0], (StrExpr, BytesExpr)):
+            ctx.api.fail(
+                message_registry.INVALID_RE_PATTERN.format(info.error_msg),
+                receiver.args[0],
+            )
+    return ctx.default_return_type
+
+
 def match_group_callback(ctx: MethodContext) -> Type:
     if not ctx.args or not ctx.args[0]:
         return ctx.default_return_type
 
     info = _resolve_match_pattern(ctx)
-    if info is not None and info.is_valid:
+    if info is not None:
         _validate_group_args(ctx, info)
 
     return ctx.default_return_type
@@ -464,49 +854,7 @@ def match_getitem_callback(ctx: MethodContext) -> Type:
         return ctx.default_return_type
 
     info = _resolve_match_pattern(ctx)
-    if info is not None and info.is_valid:
+    if info is not None:
         _validate_group_args(ctx, info)
 
     return ctx.default_return_type
-
-
-def _resolve_match_pattern(ctx: MethodContext) -> PatternInfo | None:
-    var = _find_var_from_method_context(ctx)
-    if var is None:
-        return None
-
-    context_line = getattr(ctx.context, "line", None)
-    call = _find_assignment_rvalue_call(ctx.api, var, context_line)
-    if call is None:
-        return None
-
-    callee = call.callee
-
-    if isinstance(callee, MemberExpr) and callee.name in ("match", "search", "fullmatch"):
-        if callee.fullname in ("re.match", "re.search", "re.fullmatch"):
-            if call.args and isinstance(call.args[0], (StrExpr, BytesExpr)):
-                return analyze_pattern(call.args[0].value)
-            return None
-
-        receiver = callee.expr
-        if isinstance(receiver, NameExpr) and isinstance(receiver.node, Var):
-            info = _resolve_pattern_for_var(ctx, receiver.node)
-            if info is not None and info.is_valid:
-                return info
-            return None
-        if isinstance(receiver, CallExpr):
-            recv_callee = receiver.callee
-            if isinstance(recv_callee, RefExpr) and recv_callee.fullname == "re.compile":
-                if receiver.args and isinstance(receiver.args[0], (StrExpr, BytesExpr)):
-                    info = analyze_pattern(receiver.args[0].value)
-                    return info if info.is_valid else None
-        return None
-
-    if isinstance(callee, RefExpr):
-        fullname = callee.fullname
-        if fullname in ("re.match", "re.search", "re.fullmatch"):
-            if call.args and isinstance(call.args[0], (StrExpr, BytesExpr)):
-                return analyze_pattern(call.args[0].value)
-        return None
-
-    return None

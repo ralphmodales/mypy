@@ -62,6 +62,7 @@ from mypy.plugins.re_module import (
     re_findall_callback,
     re_match_callback,
     re_pattern_findall_callback,
+    re_pattern_match_callback,
     re_pattern_sub_callback,
     re_pattern_subn_callback,
     re_split_callback,
@@ -198,7 +199,7 @@ class DefaultPlugin(Plugin):
         elif fullname == "re.Match.__getitem__":
             return match_getitem_callback
         elif fullname in ("re.Pattern.match", "re.Pattern.search", "re.Pattern.fullmatch"):
-            return re_match_callback
+            return re_pattern_match_callback
         elif fullname == "re.Pattern.sub":
             return re_pattern_sub_callback
         elif fullname == "re.Pattern.subn":
