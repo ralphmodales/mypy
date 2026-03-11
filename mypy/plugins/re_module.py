@@ -3,8 +3,7 @@ from __future__ import annotations
 import re as stdlib_re
 from typing import Final, NamedTuple
 
-import mypy.errorcodes as codes
-import mypy.plugin
+from mypy import message_registry
 from mypy.nodes import (
     AssignmentStmt,
     BytesExpr,
@@ -18,27 +17,12 @@ from mypy.nodes import (
 )
 from mypy.plugin import CheckerPluginInterface, FunctionContext, MethodContext
 from mypy.typeops import try_getting_int_literals_from_type, try_getting_str_literals
-from mypy.types import (
-    AnyType,
-    Instance,
-    NoneType,
-    TupleType,
-    Type,
-    TypeOfAny,
-    UnionType,
-    get_proper_type,
-)
+from mypy.types import Instance, NoneType, TupleType, Type, UnionType, get_proper_type
 
 
 _ESCAPED_BACKSLASH_RE: Final = stdlib_re.compile(r"\\\\")
 _NUMERIC_BACKREF_RE: Final = stdlib_re.compile(r"\\(\d+)")
 _NAMED_BACKREF_RE: Final = stdlib_re.compile(r"\\g<([^>]+)>")
-
-_COMPILE_PATTERN_REGISTRY: dict[int, str] = {}
-
-_RE_COMPILE_FULLNAMES: Final = frozenset({
-    "re.compile",
-})
 
 _RE_FUNC_FULLNAMES: Final = frozenset({
     "re.compile",
@@ -60,10 +44,10 @@ class PatternInfo(NamedTuple):
     error_msg: str | None
 
 
-_PATTERN_ANALYSIS_CACHE: dict[str, PatternInfo] = {}
+_PATTERN_ANALYSIS_CACHE: dict[str | bytes, PatternInfo] = {}
 
 
-def analyze_pattern(pattern: str) -> PatternInfo:
+def analyze_pattern(pattern: str | bytes) -> PatternInfo:
     cached = _PATTERN_ANALYSIS_CACHE.get(pattern)
     if cached is not None:
         return cached
@@ -86,7 +70,9 @@ def analyze_pattern(pattern: str) -> PatternInfo:
     return info
 
 
-def _get_pattern_from_expr(ctx: FunctionContext | MethodContext, arg_index: int) -> str | None:
+def _get_pattern_from_expr(
+    ctx: FunctionContext | MethodContext, arg_index: int
+) -> str | bytes | None:
     if arg_index >= len(ctx.args) or not ctx.args[arg_index]:
         return None
 
@@ -140,9 +126,8 @@ def _report_invalid_pattern(
 ) -> None:
     if not info.is_valid and arg_index < len(ctx.args) and ctx.args[arg_index]:
         ctx.api.fail(
-            f"Invalid regex pattern: {info.error_msg}",
+            message_registry.INVALID_RE_PATTERN.format(info.error_msg),
             ctx.args[arg_index][0],
-            code=codes.RE_PATTERN,
         )
 
 
@@ -164,10 +149,10 @@ def _validate_replacement_refs(
             continue
         if group_num > info.group_count:
             ctx.api.fail(
-                f"Replacement references group {group_num}, "
-                f"but pattern only has {info.group_count} group(s)",
+                message_registry.INVALID_RE_REPLACEMENT_REF.format(
+                    group_num, info.group_count
+                ),
                 ctx.args[repl_arg_index][0],
-                code=codes.RE_GROUP,
             )
 
     for m in _NAMED_BACKREF_RE.finditer(cleaned):
@@ -178,17 +163,17 @@ def _validate_replacement_refs(
                 continue
             if group_num > info.group_count:
                 ctx.api.fail(
-                    f"Replacement references group {group_num}, "
-                    f"but pattern only has {info.group_count} group(s)",
+                    message_registry.INVALID_RE_REPLACEMENT_REF.format(
+                        group_num, info.group_count
+                    ),
                     ctx.args[repl_arg_index][0],
-                    code=codes.RE_GROUP,
                 )
         elif name not in info.named_groups:
             ctx.api.fail(
-                f'Replacement references unknown group name "{name}"; '
-                f"pattern has groups: {sorted(info.named_groups)}",
+                message_registry.INVALID_RE_REPLACEMENT_NAME.format(
+                    name, sorted(info.named_groups)
+                ),
                 ctx.args[repl_arg_index][0],
-                code=codes.RE_GROUP,
             )
 
 
@@ -282,7 +267,7 @@ def _find_assignment_rvalue_call(
     return None
 
 
-def _extract_pattern_from_call(call: CallExpr) -> str | None:
+def _extract_pattern_from_call(call: CallExpr) -> str | bytes | None:
     callee = call.callee
     fullname: str | None = None
     if isinstance(callee, RefExpr):
@@ -291,17 +276,12 @@ def _extract_pattern_from_call(call: CallExpr) -> str | None:
         return None
     if fullname not in _RE_FUNC_FULLNAMES:
         return None
-    if call.args and isinstance(call.args[0], StrExpr):
+    if call.args and isinstance(call.args[0], (StrExpr, BytesExpr)):
         return call.args[0].value
     return None
 
 
 def _resolve_pattern_for_var(ctx: MethodContext, var: Var) -> PatternInfo | None:
-    var_id = id(var)
-    cached_pat = _COMPILE_PATTERN_REGISTRY.get(var_id)
-    if cached_pat is not None:
-        return analyze_pattern(cached_pat)
-
     call = _find_assignment_rvalue_call(ctx.api, var)
     if call is None:
         return None
@@ -310,7 +290,6 @@ def _resolve_pattern_for_var(ctx: MethodContext, var: Var) -> PatternInfo | None
     if pattern_str is None:
         return None
 
-    _COMPILE_PATTERN_REGISTRY[var_id] = pattern_str
     return analyze_pattern(pattern_str)
 
 
@@ -335,10 +314,10 @@ def _validate_group_args(ctx: MethodContext, info: PatternInfo) -> None:
             for name in str_literals:
                 if name not in info.named_groups:
                     ctx.api.fail(
-                        f'Regex pattern has no group named "{name}"; '
-                        f"pattern has groups: {sorted(info.named_groups)}",
+                        message_registry.INVALID_RE_GROUP_NAME.format(
+                            name, sorted(info.named_groups)
+                        ),
                         arg_expr,
-                        code=codes.RE_GROUP,
                     )
             continue
 
@@ -349,10 +328,10 @@ def _validate_group_args(ctx: MethodContext, info: PatternInfo) -> None:
                     continue
                 if idx < 0 or idx > info.group_count:
                     ctx.api.fail(
-                        f"Regex group index {idx} is out of range "
-                        f"(pattern has {info.group_count} groups)",
+                        message_registry.INVALID_RE_GROUP_INDEX.format(
+                            idx, info.group_count
+                        ),
                         arg_expr,
-                        code=codes.RE_GROUP,
                     )
 
 
@@ -361,8 +340,6 @@ def re_compile_callback(ctx: FunctionContext) -> Type:
     if pattern_str is not None:
         info = analyze_pattern(pattern_str)
         _report_invalid_pattern(ctx, info, arg_index=0)
-        if info.is_valid and isinstance(ctx.context, CallExpr):
-            _COMPILE_PATTERN_REGISTRY[id(ctx.context)] = pattern_str
     return ctx.default_return_type
 
 
@@ -488,54 +465,5 @@ def _resolve_match_pattern(ctx: MethodContext) -> PatternInfo | None:
         if call.args and isinstance(call.args[0], StrExpr):
             return analyze_pattern(call.args[0].value)
         return None
-
-    if fullname == "re.compile":
-        if call.args and isinstance(call.args[0], StrExpr):
-            pattern_str = call.args[0].value
-            info = analyze_pattern(pattern_str)
-            if not info.is_valid:
-                return None
-            return _resolve_match_from_pattern_var(ctx, call)
-        return None
-
-    return None
-
-
-def _resolve_match_from_pattern_var(
-    ctx: MethodContext, compile_call: CallExpr
-) -> PatternInfo | None:
-    if not compile_call.args or not isinstance(compile_call.args[0], StrExpr):
-        return None
-
-    from mypy.checker import TypeChecker
-
-    if not isinstance(ctx.api, TypeChecker):
-        return None
-
-    var = _find_var_from_method_context(ctx)
-    if var is None:
-        return None
-
-    tree = ctx.api.tree
-    for stmt in tree.defs:
-        if not isinstance(stmt, AssignmentStmt):
-            continue
-        if not isinstance(stmt.rvalue, CallExpr):
-            continue
-        call = stmt.rvalue
-        call_callee = call.callee
-        if not isinstance(call_callee, MemberExpr):
-            continue
-        receiver = call_callee.expr
-        if not isinstance(receiver, NameExpr):
-            continue
-        receiver_node = receiver.node
-        if not isinstance(receiver_node, Var):
-            continue
-        pat_str = _COMPILE_PATTERN_REGISTRY.get(id(receiver_node))
-        if pat_str is not None:
-            for lval in stmt.lvalues:
-                if isinstance(lval, NameExpr) and lval.node is var:
-                    return analyze_pattern(pat_str)
 
     return None

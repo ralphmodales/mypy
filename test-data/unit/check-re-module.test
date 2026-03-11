@@ -308,3 +308,23 @@ import re
 parts = re.split(rb"\d+", b"abc123def456")
 reveal_type(parts)  # N: Revealed type is "builtins.list[builtins.bytes]"
 [builtins fixtures/tuple.pyi]
+
+[case testReIncrementalPatternUpdate]
+import m
+
+[file m.py]
+import re
+pat = re.compile(r"(\w+)")
+pat.sub(r"\2", "hello")
+
+[out1]
+tmp/m.py:3: error: Replacement references group 2, but pattern only has 1 group(s)
+
+[file m.py.2]
+import re
+pat = re.compile(r"(\w+)(\w+)")
+pat.sub(r"\2", "hello")
+
+[rechecked m]
+
+[builtins fixtures/tuple.pyi]
