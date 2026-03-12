@@ -10,6 +10,7 @@ from mypy.nodes import (
     CallExpr,
     ClassDef,
     Expression,
+    ForStmt,
     IndexExpr,
     IntExpr,
     MemberExpr,
@@ -107,6 +108,124 @@ def analyze_pattern(pattern: str | bytes, flags: int) -> PatternInfo:
     return info
 
 
+def _contains_atomic_group(pattern: str | bytes) -> bool:
+    in_class = False
+    escaped = False
+    if isinstance(pattern, bytes):
+        for i in range(len(pattern) - 2):
+            c = pattern[i]
+            if escaped:
+                escaped = False
+                continue
+            if c == 92:
+                escaped = True
+                continue
+            if c == 91 and not in_class:
+                in_class = True
+                continue
+            if c == 93 and in_class:
+                in_class = False
+                continue
+            if in_class:
+                continue
+            if c == 40 and pattern[i + 1] == 63 and pattern[i + 2] == 62:
+                return True
+        return False
+    for i in range(len(pattern) - 2):
+        c = pattern[i]
+        if escaped:
+            escaped = False
+            continue
+        if c == "\\":
+            escaped = True
+            continue
+        if c == "[" and not in_class:
+            in_class = True
+            continue
+        if c == "]" and in_class:
+            in_class = False
+            continue
+        if in_class:
+            continue
+        if c == "(" and pattern[i + 1] == "?" and pattern[i + 2] == ">":
+            return True
+    return False
+
+
+def _analyze_pattern_for_target(
+    python_version: tuple[int, int], pattern: str | bytes, flags: int
+) -> PatternInfo:
+    if python_version < (3, 11) and _contains_atomic_group(pattern):
+        return PatternInfo(
+            group_count=0,
+            named_groups={},
+            is_valid=False,
+            error_msg="atomic groups are only supported on Python 3.11+",
+        )
+    return analyze_pattern(pattern, flags)
+
+
+def _bytesexpr_value_to_bytes(value: str) -> bytes:
+    escapes = {
+        "a": 7,
+        "b": 8,
+        "f": 12,
+        "n": 10,
+        "r": 13,
+        "t": 9,
+        "v": 11,
+        "\\": 92,
+        "\"": 34,
+        "'": 39,
+    }
+    out = bytearray()
+    i = 0
+    n = len(value)
+    while i < n:
+        c = value[i]
+        if c != "\\":
+            out.append(ord(c) & 0xFF)
+            i += 1
+            continue
+        if i + 1 >= n:
+            out.append(92)
+            break
+        nxt = value[i + 1]
+        if nxt in escapes:
+            out.append(escapes[nxt])
+            i += 2
+            continue
+        if nxt == "x" and i + 3 < n:
+            h1 = value[i + 2]
+            h2 = value[i + 3]
+            if all(ch in "0123456789abcdefABCDEF" for ch in (h1, h2)):
+                out.append(int(value[i + 2 : i + 4], 16))
+                i += 4
+                continue
+        if nxt in "01234567":
+            j = i + 1
+            k = 0
+            while j < n and k < 3 and value[j] in "01234567":
+                j += 1
+                k += 1
+            out.append(int(value[i + 1 : j], 8))
+            i = j
+            continue
+        out.append(92)
+        out.append(ord(nxt) & 0xFF)
+        i += 2
+
+    return bytes(out)
+
+
+def _literal_string_or_bytes_value(expr: Expression) -> str | bytes | None:
+    if isinstance(expr, StrExpr):
+        return expr.value
+    if isinstance(expr, BytesExpr):
+        return _bytesexpr_value_to_bytes(expr.value)
+    return None
+
+
 def _get_pattern_from_expr(
     ctx: FunctionContext | MethodContext, arg_index: int
 ) -> str | bytes | None:
@@ -114,11 +233,9 @@ def _get_pattern_from_expr(
         return None
 
     expr = ctx.args[arg_index][0]
-    if isinstance(expr, StrExpr):
-        return expr.value
-
-    if isinstance(expr, BytesExpr):
-        return expr.value
+    lit = _literal_string_or_bytes_value(expr)
+    if lit is not None:
+        return lit
 
     if arg_index < len(ctx.arg_types) and ctx.arg_types[arg_index]:
         literals = try_getting_str_literals(expr, ctx.arg_types[arg_index][0])
@@ -235,9 +352,59 @@ def _report_invalid_pattern(
         )
 
 
-def _iter_replacement_refs(repl: str) -> tuple[list[int], list[str]]:
+def _iter_replacement_refs(repl: str | bytes) -> tuple[list[int], list[str]]:
     numeric: list[int] = []
     named: list[str] = []
+    if isinstance(repl, bytes):
+        i = 0
+        n = len(repl)
+        while i < n:
+            c = repl[i]
+            if c != 92:
+                i += 1
+                continue
+            if i + 1 >= n:
+                break
+            nxt = repl[i + 1]
+            if nxt == 92:
+                i += 2
+                continue
+            if nxt == 103 and i + 2 < n and repl[i + 2] == 60:
+                j = i + 3
+                while j < n and repl[j] != 62:
+                    j += 1
+                if j >= n:
+                    i += 2
+                    continue
+                name_b = repl[i + 3 : j]
+                try:
+                    name = name_b.decode("ascii")
+                except UnicodeDecodeError:
+                    name = ""
+                if name.isdigit():
+                    numeric.append(int(name))
+                else:
+                    named.append(name)
+                i = j + 1
+                continue
+            if 48 <= nxt <= 57:
+                if nxt == 48:
+                    j = i + 2
+                    k = 0
+                    while j < n and k < 2 and 48 <= repl[j] <= 55:
+                        j += 1
+                        k += 1
+                    i = j
+                    continue
+                j = i + 1
+                while j < n and 48 <= repl[j] <= 57:
+                    j += 1
+                numeric.append(int(repl[i + 1 : j].decode("ascii")))
+                i = j
+                continue
+            i += 2
+        return numeric, named
+
     i = 0
     n = len(repl)
     while i < n:
@@ -286,7 +453,7 @@ def _iter_replacement_refs(repl: str) -> tuple[list[int], list[str]]:
 
 def _validate_replacement_refs(
     ctx: FunctionContext | MethodContext,
-    repl: str,
+    repl: str | bytes,
     info: PatternInfo,
     repl_arg_index: int,
 ) -> None:
@@ -336,13 +503,16 @@ def _build_split_type(
 
 def _get_repl_string(
     ctx: FunctionContext | MethodContext, repl_arg_index: int
-) -> list[str] | None:
+) -> list[str | bytes] | None:
     if repl_arg_index >= len(ctx.args) or not ctx.args[repl_arg_index]:
         return None
 
     repl_expr = ctx.args[repl_arg_index][0]
     if isinstance(repl_expr, StrExpr):
         return [repl_expr.value]
+
+    if isinstance(repl_expr, BytesExpr):
+        return [_bytesexpr_value_to_bytes(repl_expr.value)]
 
     if repl_arg_index < len(ctx.arg_types) and ctx.arg_types[repl_arg_index]:
         return try_getting_str_literals(repl_expr, ctx.arg_types[repl_arg_index][0])
@@ -488,9 +658,12 @@ def _extract_pattern_flags_from_call(call: CallExpr) -> tuple[str | bytes, int] 
     if callee_fullname is None or callee_fullname not in _RE_FUNC_FULLNAMES:
         return None
 
-    if not call.args or not isinstance(call.args[0], (StrExpr, BytesExpr)):
+    if not call.args:
         return None
-    pattern = call.args[0].value
+    lit = _literal_string_or_bytes_value(call.args[0])
+    if lit is None:
+        return None
+    pattern = lit
 
     flags_expr: Expression | None = None
     for arg, name in zip(call.args, call.arg_names):
@@ -543,9 +716,12 @@ def _resolve_compiled_pattern_from_expr(
             return None
         if not _is_re_compile_callee(call.callee):
             return None
-        if not call.args or not isinstance(call.args[0], (StrExpr, BytesExpr)):
+        if not call.args:
             return None
-        pattern = call.args[0].value
+        lit = _literal_string_or_bytes_value(call.args[0])
+        if lit is None:
+            return None
+        pattern = lit
         flags = 0
         flags_expr: Expression | None = None
         for arg, name in zip(call.args, call.arg_names):
@@ -559,7 +735,7 @@ def _resolve_compiled_pattern_from_expr(
             if flags_val is None:
                 return None
             flags = flags_val
-        info = analyze_pattern(pattern, flags)
+        info = _analyze_pattern_for_target(ctx.api.options.python_version, pattern, flags)
         return info, flags
 
     if isinstance(receiver, NameExpr) and receiver.node is None:
@@ -568,9 +744,12 @@ def _resolve_compiled_pattern_from_expr(
             return None
         if not _is_re_compile_callee(call.callee):
             return None
-        if not call.args or not isinstance(call.args[0], (StrExpr, BytesExpr)):
+        if not call.args:
             return None
-        pattern = call.args[0].value
+        lit = _literal_string_or_bytes_value(call.args[0])
+        if lit is None:
+            return None
+        pattern = lit
         flags = 0
         flags_expr: Expression | None = None
         for arg, name in zip(call.args, call.arg_names):
@@ -584,15 +763,18 @@ def _resolve_compiled_pattern_from_expr(
             if flags_val is None:
                 return None
             flags = flags_val
-        info = analyze_pattern(pattern, flags)
+        info = _analyze_pattern_for_target(ctx.api.options.python_version, pattern, flags)
         return info, flags
 
     if isinstance(receiver, CallExpr):
         if not _is_re_compile_callee(receiver.callee):
             return None
-        if not receiver.args or not isinstance(receiver.args[0], (StrExpr, BytesExpr)):
+        if not receiver.args:
             return None
-        pattern = receiver.args[0].value
+        lit = _literal_string_or_bytes_value(receiver.args[0])
+        if lit is None:
+            return None
+        pattern = lit
         flags = 0
         flags_expr: Expression | None = None
         for arg, name in zip(receiver.args, receiver.arg_names):
@@ -606,7 +788,7 @@ def _resolve_compiled_pattern_from_expr(
             if flags_val is None:
                 return None
             flags = flags_val
-        info = analyze_pattern(pattern, flags)
+        info = _analyze_pattern_for_target(ctx.api.options.python_version, pattern, flags)
         return info, flags
 
     return None
@@ -615,6 +797,7 @@ def _resolve_compiled_pattern_from_expr(
 def _resolve_match_pattern(ctx: MethodContext) -> PatternInfo | None:
     context_line = getattr(ctx.context, "line", None)
     var = _find_var_from_method_context(ctx)
+    name: str | None = None
     if var is not None:
         call = _find_assignment_rvalue_call(ctx.api, var, context_line)
     else:
@@ -623,7 +806,34 @@ def _resolve_match_pattern(ctx: MethodContext) -> PatternInfo | None:
             return None
         call = _find_assignment_rvalue_call_by_name(ctx.api, name, context_line)
     if call is None:
-        return None
+        for_call = _find_enclosing_finditer_call(ctx, var, name, context_line)
+        if for_call is None:
+            return None
+        call = for_call
+
+    if isinstance(call.callee, MemberExpr) and call.callee.fullname == "re.finditer":
+        pf = _extract_pattern_flags_from_call(call)
+        if pf is None:
+            return None
+        pattern, flags = pf
+        info = _analyze_pattern_for_target(ctx.api.options.python_version, pattern, flags)
+        return info if info.is_valid else None
+
+    if isinstance(call.callee, RefExpr) and call.callee.fullname == "re.finditer":
+        pf = _extract_pattern_flags_from_call(call)
+        if pf is None:
+            return None
+        pattern, flags = pf
+        info = _analyze_pattern_for_target(ctx.api.options.python_version, pattern, flags)
+        return info if info.is_valid else None
+
+    if isinstance(call.callee, MemberExpr) and call.callee.name == "finditer":
+        receiver = call.callee.expr
+        resolved = _resolve_compiled_pattern_from_expr(ctx, receiver)
+        if resolved is None:
+            return None
+        info, _ = resolved
+        return info if info.is_valid else None
 
     if isinstance(call.callee, MemberExpr) and call.callee.name in {"match", "search", "fullmatch"}:
         fullname = call.callee.fullname
@@ -632,7 +842,7 @@ def _resolve_match_pattern(ctx: MethodContext) -> PatternInfo | None:
             if pf is None:
                 return None
             pattern, flags = pf
-            info = analyze_pattern(pattern, flags)
+            info = _analyze_pattern_for_target(ctx.api.options.python_version, pattern, flags)
             return info if info.is_valid else None
 
         receiver = call.callee.expr
@@ -648,44 +858,116 @@ def _resolve_match_pattern(ctx: MethodContext) -> PatternInfo | None:
             if pf is None:
                 return None
             pattern, flags = pf
-            info = analyze_pattern(pattern, flags)
+            info = _analyze_pattern_for_target(ctx.api.options.python_version, pattern, flags)
             return info if info.is_valid else None
         return None
 
     return None
 
 
-def _validate_group_args(ctx: MethodContext, info: PatternInfo) -> None:
-    if not ctx.args or not ctx.args[0]:
-        return
+def _block_max_line(block: object) -> int:
+    body = getattr(block, "body", None)
+    if not isinstance(body, list):
+        return -1
+    m = -1
+    for st in body:
+        line = getattr(st, "end_line", None) or getattr(st, "line", -1)
+        if line > m:
+            m = line
+    return m
 
-    for i, arg_expr in enumerate(ctx.args[0]):
-        if i >= len(ctx.arg_types[0]):
-            break
-        arg_type = ctx.arg_types[0][i]
 
-        str_literals = try_getting_str_literals(arg_expr, arg_type)
-        if str_literals is not None:
-            for name in str_literals:
-                if name not in info.named_groups:
-                    ctx.api.fail(
-                        message_registry.INVALID_RE_GROUP_NAME.format(
-                            name, sorted(info.named_groups)
-                        ),
-                        arg_expr,
-                    )
-            continue
+def _find_enclosing_finditer_call(
+    ctx: MethodContext,
+    var: Var | None,
+    name: str | None,
+    context_line: int | None,
+) -> CallExpr | None:
+    from mypy.checker import TypeChecker
 
-        int_literals = try_getting_int_literals_from_type(arg_type)
-        if int_literals is not None:
-            for idx in int_literals:
-                if idx == 0:
+    if not isinstance(ctx.api, TypeChecker):
+        return None
+
+    def statement_lists() -> list[list[object]]:
+        out: list[list[object]] = []
+        func = ctx.api.scope.current_function()
+        if func is not None and getattr(func, "body", None) is not None:
+            body = func.body
+            if getattr(body, "body", None) is not None:
+                out.append(body.body)
+        info = ctx.api.scope.active_class()
+        if info is not None and getattr(info, "defn", None) is not None:
+            defn = info.defn
+            if isinstance(defn, ClassDef):
+                defs = getattr(defn, "defs", None)
+                if defs is not None and getattr(defs, "body", None) is not None:
+                    out.append(defs.body)
+        out.append(ctx.api.tree.defs)
+        return out
+
+    for stmts in statement_lists():
+        for st in stmts:
+            if not isinstance(st, ForStmt):
+                continue
+            idx = st.index
+            if isinstance(idx, NameExpr):
+                if var is not None and idx.node is not var:
                     continue
-                if idx < 0 or idx > info.group_count:
-                    ctx.api.fail(
-                        message_registry.INVALID_RE_GROUP_INDEX.format(idx, info.group_count),
-                        arg_expr,
-                    )
+                if var is None and name is not None and idx.name != name:
+                    continue
+            else:
+                continue
+
+            if context_line is not None:
+                end_line = _block_max_line(st.body)
+                if not (st.line <= context_line <= end_line):
+                    continue
+
+            expr = st.expr
+            if not isinstance(expr, CallExpr):
+                continue
+            callee_fullname = _ref_fullname(expr.callee)
+            if callee_fullname == "re.finditer":
+                return expr
+            if isinstance(expr.callee, MemberExpr) and expr.callee.name == "finditer":
+                return expr
+    return None
+
+
+def _validate_group_args(ctx: MethodContext, info: PatternInfo) -> None:
+    for formal_i, exprs in enumerate(ctx.args):
+        if formal_i >= len(ctx.arg_types):
+            continue
+        types = ctx.arg_types[formal_i]
+        for actual_i, arg_expr in enumerate(exprs):
+            if actual_i >= len(types):
+                continue
+            arg_type = types[actual_i]
+
+            str_literals = try_getting_str_literals(arg_expr, arg_type)
+            if str_literals is not None:
+                for name in str_literals:
+                    if name not in info.named_groups:
+                        ctx.api.fail(
+                            message_registry.INVALID_RE_GROUP_NAME.format(
+                                name, sorted(info.named_groups)
+                            ),
+                            arg_expr,
+                        )
+                continue
+
+            int_literals = try_getting_int_literals_from_type(arg_type)
+            if int_literals is not None:
+                for idx in int_literals:
+                    if idx == 0:
+                        continue
+                    if idx < 0 or idx > info.group_count:
+                        ctx.api.fail(
+                            message_registry.INVALID_RE_GROUP_INDEX.format(
+                                idx, info.group_count
+                            ),
+                            arg_expr,
+                        )
 
 
 def re_compile_callback(ctx: FunctionContext) -> Type:
@@ -697,7 +979,7 @@ def re_compile_callback(ctx: FunctionContext) -> Type:
     if flags is None:
         return ctx.default_return_type
 
-    info = analyze_pattern(pattern, flags)
+    info = _analyze_pattern_for_target(ctx.api.options.python_version, pattern, flags)
     if not info.is_valid:
         _report_invalid_pattern(ctx, info, arg_index=0)
     return ctx.default_return_type
@@ -712,7 +994,7 @@ def re_match_callback(ctx: FunctionContext) -> Type:
     if flags is None:
         return ctx.default_return_type
 
-    info = analyze_pattern(pattern, flags)
+    info = _analyze_pattern_for_target(ctx.api.options.python_version, pattern, flags)
     if not info.is_valid:
         _report_invalid_pattern(ctx, info, arg_index=0)
     return ctx.default_return_type
@@ -727,7 +1009,7 @@ def re_findall_callback(ctx: FunctionContext) -> Type:
     if flags is None:
         return ctx.default_return_type
 
-    info = analyze_pattern(pattern, flags)
+    info = _analyze_pattern_for_target(ctx.api.options.python_version, pattern, flags)
     if not info.is_valid:
         _report_invalid_pattern(ctx, info, arg_index=0)
         return ctx.default_return_type
@@ -745,7 +1027,7 @@ def re_split_callback(ctx: FunctionContext) -> Type:
     if flags is None:
         return ctx.default_return_type
 
-    info = analyze_pattern(pattern, flags)
+    info = _analyze_pattern_for_target(ctx.api.options.python_version, pattern, flags)
     if not info.is_valid:
         _report_invalid_pattern(ctx, info, arg_index=0)
         return ctx.default_return_type
@@ -763,7 +1045,7 @@ def re_sub_callback(ctx: FunctionContext) -> Type:
     if flags is None:
         return ctx.default_return_type
 
-    info = analyze_pattern(pattern, flags)
+    info = _analyze_pattern_for_target(ctx.api.options.python_version, pattern, flags)
     if not info.is_valid:
         _report_invalid_pattern(ctx, info, arg_index=0)
         return ctx.default_return_type

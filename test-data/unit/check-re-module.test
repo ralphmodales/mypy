@@ -146,6 +146,12 @@ results = re.findall(rb"(\w+)@(\w+)", b"user@host")
 reveal_type(results)  # N: Revealed type is "builtins.list[tuple[builtins.bytes, builtins.bytes]]"
 [builtins fixtures/tuple.pyi]
 
+[case testReFindallBytePatternOneGroup]
+import re
+results = re.findall(rb"(\d+)", b"abc 123")
+reveal_type(results)  # N: Revealed type is "builtins.list[builtins.bytes]"
+[builtins fixtures/tuple.pyi]
+
 [case testReSplitWithGroups]
 import re
 parts = re.split(r"(\d+)", "abc123def456")
@@ -295,6 +301,75 @@ result = re.sub(r"(?P<a>\w+) (\w+)", r"\g<a> \2", "hello world")
 [case testReSubNamedNumericOutOfRange]
 import re
 result = re.sub(r"(?P<a>\w+) (\w+)", r"\g<a> \3", "hello world")  # E: Replacement references group 3, but pattern only has 2 group(s)
+[builtins fixtures/tuple.pyi]
+
+[case testReInvalidBytesPatternCompile]
+import re
+re.compile(rb"(unclosed")  # E: Invalid regex pattern: missing ), unterminated subpattern at position 0
+[builtins fixtures/tuple.pyi]
+
+[case testReInvalidBytesPatternMatch]
+import re
+re.match(rb"(unclosed", b"x")  # E: Invalid regex pattern: missing ), unterminated subpattern at position 0
+[builtins fixtures/tuple.pyi]
+
+[case testReBytesSubBackrefValidation]
+import re
+
+re.sub(rb"(a)", rb"\2", b"a")  # E: Replacement references group 2, but pattern only has 1 group(s)
+re.sub(rb"(?P<name>a)", rb"\g<missing>", b"a")  # E: Replacement references unknown group name "missing"; pattern has groups: ['name']
+re.sub(rb"(a)", rb"\1", b"a")
+re.sub(rb"(?P<name>a)", rb"\g<name>", b"a")
+
+pat = re.compile(rb"(a)")
+pat.sub(rb"\2", b"a")  # E: Replacement references group 2, but pattern only has 1 group(s)
+pat.sub(rb"\1", b"a")
+
+pat2 = re.compile(rb"(?P<name>a)")
+pat2.sub(rb"\g<missing>", b"a")  # E: Replacement references unknown group name "missing"; pattern has groups: ['name']
+pat2.sub(rb"\g<name>", b"a")
+
+pat3 = re.compile(rb"(a)")
+pat3.subn(rb"\2", b"a")  # E: Replacement references group 2, but pattern only has 1 group(s)
+[builtins fixtures/tuple.pyi]
+
+[case testReMatchGroupSecondArgInvalid]
+import re
+m = re.match(r"(?P<a>\w+) (?P<b>\w+)", "x y")
+if m:
+    m.group("a", "nope")  # E: Regex pattern has no group named "nope"; pattern has groups: ['a', 'b']
+    m.group("a", 3)  # E: Regex group index 3 is out of range (pattern has 2 groups)
+[builtins fixtures/tuple.pyi]
+
+[case testReFinditerOriginMatchValidation]
+import re
+for m in re.finditer(r"(?P<name>\w+)", "x"):
+    m.group("naem")  # E: Regex pattern has no group named "naem"; pattern has groups: ['name']
+    m.group(2)  # E: Regex group index 2 is out of range (pattern has 1 groups)
+[builtins fixtures/tuple.pyi]
+
+[case testReAmbiguousProvenanceFallsBack]
+import re
+from typing import Any
+
+pat1 = re.compile(r"(a)")
+pat2 = re.compile(r"(a)(b)")
+cond: bool
+pat = pat1 if cond else pat2
+
+reveal_type(pat.sub(r"\2", "a"))  # N: Revealed type is "builtins.str"
+[builtins fixtures/tuple.pyi]
+
+[case testRePythonVersionAtomicGroups]
+# flags: --python-version 3.10
+import re
+re.compile(r"(?>(a))")  # E: Invalid regex pattern: atomic groups are only supported on Python 3.11+
+[builtins fixtures/tuple.pyi]
+
+[case testRePythonVersionAtomicGroups311]
+# flags: --python-version 3.11
+import re
+re.compile(r"(?>(a))")
 [builtins fixtures/tuple.pyi]
 
 [case testRePatternSubNamedInvalid]
