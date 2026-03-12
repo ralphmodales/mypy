@@ -592,6 +592,7 @@ def _find_assignment_rvalue_call(
 
     best: CallExpr | None = None
     best_line = -1
+    match_count = 0
     for stmts in statement_lists():
         for stmt in stmts:
             if not isinstance(stmt, AssignmentStmt):
@@ -603,9 +604,12 @@ def _find_assignment_rvalue_call(
                 continue
             for lval in stmt.lvalues:
                 if isinstance(lval, NameExpr) and lval.node is var:
+                    match_count += 1
                     if stmt_line >= best_line:
                         best = stmt.rvalue
                         best_line = stmt_line
+    if match_count > 1:
+        return None
     return best
 
 
@@ -636,6 +640,7 @@ def _find_assignment_rvalue_call_by_name(
 
     best: CallExpr | None = None
     best_line = -1
+    match_count = 0
     for stmts in statement_lists():
         for stmt in stmts:
             if not isinstance(stmt, AssignmentStmt):
@@ -647,9 +652,12 @@ def _find_assignment_rvalue_call_by_name(
                 continue
             for lval in stmt.lvalues:
                 if isinstance(lval, NameExpr) and lval.name == name:
+                    match_count += 1
                     if stmt_line >= best_line:
                         best = stmt.rvalue
                         best_line = stmt_line
+    if match_count > 1:
+        return None
     return best
 
 

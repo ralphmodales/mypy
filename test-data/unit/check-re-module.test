@@ -360,6 +360,19 @@ pat = pat1 if cond else pat2
 reveal_type(pat.sub(r"\2", "a"))  # N: Revealed type is "builtins.str"
 [builtins fixtures/tuple.pyi]
 
+[case testReAmbiguousReassignmentFallsBack]
+import re
+
+pat = re.compile(r"(a)(b)(c)")
+pat = re.compile(r"(a)")
+pat.sub(r"\3", "a")
+
+m = re.match(r"(?P<x>\w+)", "a")
+m = re.search(r"(?P<y>\w+)", "b")
+if m:
+    m.group("z")
+[builtins fixtures/tuple.pyi]
+
 [case testRePythonVersionAtomicGroups]
 # flags: --python-version 3.10
 import re
