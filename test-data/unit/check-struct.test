@@ -1,0 +1,102 @@
+[case testStructUnpackBasicFormats]
+import struct
+reveal_type(struct.unpack("i", b""))  # N: Revealed type is "tuple[builtins.int]"
+reveal_type(struct.unpack("ii", b""))  # N: Revealed type is "tuple[builtins.int, builtins.int]"
+reveal_type(struct.unpack(">hhb", b""))  # N: Revealed type is "tuple[builtins.int, builtins.int, builtins.int]"
+reveal_type(struct.unpack("f", b""))  # N: Revealed type is "tuple[builtins.float]"
+reveal_type(struct.unpack("fd", b""))  # N: Revealed type is "tuple[builtins.float, builtins.float]"
+reveal_type(struct.unpack("?", b""))  # N: Revealed type is "tuple[builtins.bool]"
+reveal_type(struct.unpack("c", b""))  # N: Revealed type is "tuple[builtins.bytes]"
+[builtins fixtures/tuple.pyi]
+
+[case testStructUnpackRepeatCount]
+import struct
+reveal_type(struct.unpack("3i", b""))  # N: Revealed type is "tuple[builtins.int, builtins.int, builtins.int]"
+reveal_type(struct.unpack("2c", b""))  # N: Revealed type is "tuple[builtins.bytes, builtins.bytes]"
+reveal_type(struct.unpack("5c", b""))  # N: Revealed type is "tuple[builtins.bytes, builtins.bytes, builtins.bytes, builtins.bytes, builtins.bytes]"
+[builtins fixtures/tuple.pyi]
+
+[case testStructUnpackPadAndPrefix]
+import struct
+reveal_type(struct.unpack("2xi", b""))  # N: Revealed type is "tuple[builtins.int]"
+reveal_type(struct.unpack("@i", b""))  # N: Revealed type is "tuple[builtins.int]"
+reveal_type(struct.unpack("=i", b""))  # N: Revealed type is "tuple[builtins.int]"
+reveal_type(struct.unpack("<bhl", b""))  # N: Revealed type is "tuple[builtins.int, builtins.int, builtins.int]"
+reveal_type(struct.unpack("!L", b""))  # N: Revealed type is "tuple[builtins.int]"
+[builtins fixtures/tuple.pyi]
+
+[case testStructUnpackStringPascal]
+import struct
+reveal_type(struct.unpack("5s", b""))  # N: Revealed type is "tuple[builtins.bytes]"
+reveal_type(struct.unpack("0s", b""))  # N: Revealed type is "tuple[builtins.bytes]"
+reveal_type(struct.unpack("255s", b""))  # N: Revealed type is "tuple[builtins.bytes]"
+reveal_type(struct.unpack("5p", b""))  # N: Revealed type is "tuple[builtins.bytes]"
+reveal_type(struct.unpack("0c", b""))  # N: Revealed type is "tuple[()]"
+[builtins fixtures/tuple.pyi]
+
+[case testStructUnpackMixedLargerFormat]
+import struct
+reveal_type(struct.unpack("3eH", b""))  # N: Revealed type is "tuple[builtins.float, builtins.float, builtins.float, builtins.int]"
+reveal_type(struct.unpack("?x?", b""))  # N: Revealed type is "tuple[builtins.bool, builtins.bool]"
+reveal_type(struct.unpack("fd4x", b""))  # N: Revealed type is "tuple[builtins.float, builtins.float]"
+reveal_type(struct.unpack("2i4x2h", b""))  # N: Revealed type is "tuple[builtins.int, builtins.int, builtins.int, builtins.int]"
+reveal_type(struct.unpack("iP", b""))  # N: Revealed type is "tuple[builtins.int, builtins.int]"
+[builtins fixtures/tuple.pyi]
+
+[case testStructUnpackWhitespace]
+import struct
+reveal_type(struct.unpack("> b h l", b""))  # N: Revealed type is "tuple[builtins.int, builtins.int, builtins.int]"
+reveal_type(struct.unpack("i i i", b""))  # N: Revealed type is "tuple[builtins.int, builtins.int, builtins.int]"
+reveal_type(struct.unpack("  2h  2i  ", b""))  # N: Revealed type is "tuple[builtins.int, builtins.int, builtins.int, builtins.int]"
+[builtins fixtures/tuple.pyi]
+
+[case testStructUnpackFallback]
+import struct
+fmt: str = "i"
+reveal_type(struct.unpack(fmt, b""))  # N: Revealed type is "builtins.tuple[Any, ...]"
+reveal_type(struct.unpack("z", b""))  # N: Revealed type is "builtins.tuple[Any, ...]"
+reveal_type(struct.unpack("10z", b""))  # N: Revealed type is "builtins.tuple[Any, ...]"
+reveal_type(struct.unpack("100c", b""))  # N: Revealed type is "builtins.tuple[Any, ...]"
+reveal_type(struct.unpack("65536i", b""))  # N: Revealed type is "builtins.tuple[Any, ...]"
+[builtins fixtures/tuple.pyi]
+
+[case testStructUnpackBytesFormat]
+import struct
+reveal_type(struct.unpack(b"ii", b""))  # N: Revealed type is "tuple[builtins.int, builtins.int]"
+reveal_type(struct.unpack(b">hhb", b""))  # N: Revealed type is "tuple[builtins.int, builtins.int, builtins.int]"
+[builtins fixtures/tuple.pyi]
+
+[case testStructBytesLiteralAllApis]
+import struct
+reveal_type(struct.unpack(b"ii", b""))  # N: Revealed type is "tuple[builtins.int, builtins.int]"
+reveal_type(struct.unpack_from(b"ii", b""))  # N: Revealed type is "tuple[builtins.int, builtins.int]"
+reveal_type(struct.iter_unpack(b"f", b""))  # N: Revealed type is "typing.Iterator[tuple[builtins.float]]"
+[builtins fixtures/tuple.pyi]
+
+[case testStructIterUnpack]
+import struct
+reveal_type(struct.iter_unpack("ii", b""))  # N: Revealed type is "typing.Iterator[tuple[builtins.int, builtins.int]]"
+reveal_type(struct.iter_unpack("f", b""))  # N: Revealed type is "typing.Iterator[tuple[builtins.float]]"
+[builtins fixtures/tuple.pyi]
+
+[case testStructUnpackFrom]
+import struct
+reveal_type(struct.unpack_from("ii", b""))  # N: Revealed type is "tuple[builtins.int, builtins.int]"
+reveal_type(struct.unpack_from("f", b"", 0))  # N: Revealed type is "tuple[builtins.float]"
+[builtins fixtures/tuple.pyi]
+
+[case testStructUnpackFromFallback]
+import struct
+fmt: str = "ii"
+reveal_type(struct.unpack_from(fmt, b""))  # N: Revealed type is "builtins.tuple[Any, ...]"
+reveal_type(struct.unpack_from("z", b""))  # N: Revealed type is "builtins.tuple[Any, ...]"
+reveal_type(struct.unpack_from("65536i", b""))  # N: Revealed type is "builtins.tuple[Any, ...]"
+[builtins fixtures/tuple.pyi]
+
+[case testStructIterUnpackFallback]
+import struct
+fmt: str = "ii"
+reveal_type(struct.iter_unpack(fmt, b""))  # N: Revealed type is "typing.Iterator[builtins.tuple[Any, ...]]"
+reveal_type(struct.iter_unpack("z", b""))  # N: Revealed type is "typing.Iterator[builtins.tuple[Any, ...]]"
+reveal_type(struct.iter_unpack("65536i", b""))  # N: Revealed type is "typing.Iterator[builtins.tuple[Any, ...]]"
+[builtins fixtures/tuple.pyi]

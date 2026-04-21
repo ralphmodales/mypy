@@ -61,6 +61,14 @@ from mypy.plugins.singledispatch import (
     create_singledispatch_function_callback,
     singledispatch_register_callback,
 )
+from mypy.plugins.struct import (
+    STRUCT_ITER_UNPACK_FULLNAME,
+    STRUCT_UNPACK_FROM_FULLNAME,
+    STRUCT_UNPACK_FULLNAME,
+    struct_iter_unpack_callback,
+    struct_unpack_callback,
+    struct_unpack_from_callback,
+)
 from mypy.subtypes import is_subtype
 from mypy.typeops import is_literal_type_like, make_simplified_union
 from mypy.types import (
@@ -107,6 +115,12 @@ class DefaultPlugin(Plugin):
             return enum_member_callback
         elif fullname == "builtins.len":
             return len_callback
+        elif fullname == STRUCT_UNPACK_FULLNAME:
+            return struct_unpack_callback
+        elif fullname == STRUCT_UNPACK_FROM_FULLNAME:
+            return struct_unpack_from_callback
+        elif fullname == STRUCT_ITER_UNPACK_FULLNAME:
+            return struct_iter_unpack_callback
         return None
 
     def get_function_signature_hook(
