@@ -100,3 +100,116 @@ reveal_type(struct.iter_unpack(fmt, b""))  # N: Revealed type is "typing.Iterato
 reveal_type(struct.iter_unpack("z", b""))  # N: Revealed type is "typing.Iterator[builtins.tuple[Any, ...]]"
 reveal_type(struct.iter_unpack("65536i", b""))  # N: Revealed type is "typing.Iterator[builtins.tuple[Any, ...]]"
 [builtins fixtures/tuple.pyi]
+
+[case testStructClassInstanceUnpack]
+from struct import Struct
+reveal_type(Struct("ii").unpack(b""))  # N: Revealed type is "tuple[builtins.int, builtins.int]"
+reveal_type(Struct("ii").unpack_from(b""))  # N: Revealed type is "tuple[builtins.int, builtins.int]"
+reveal_type(Struct("ii").iter_unpack(b""))  # N: Revealed type is "typing.Iterator[tuple[builtins.int, builtins.int]]"
+[builtins fixtures/tuple.pyi]
+
+[case testStructClassInstanceUnpackNonLiteral]
+from struct import Struct
+fmt: str = "ii"
+reveal_type(Struct(fmt).unpack(b""))  # N: Revealed type is "builtins.tuple[Any, ...]"
+reveal_type(Struct(fmt).iter_unpack(b""))  # N: Revealed type is "typing.Iterator[builtins.tuple[Any, ...]]"
+[builtins fixtures/tuple.pyi]
+
+[case testStructPackBasic]
+import struct
+struct.pack("ii", 1, 2)
+struct.pack("f", 1.5)
+struct.pack("c", b"x")
+struct.pack("5s", b"hello")
+reveal_type(struct.pack("i", 1))  # N: Revealed type is "builtins.bytes"
+[builtins fixtures/tuple.pyi]
+
+[case testStructPackArgTypeMismatch]
+import struct
+struct.pack("i", "bad")  # E: Argument 1 to "struct.pack" has incompatible type "str"; expected "int" (for format char "i")
+struct.pack("f", "bad")  # E: Argument 1 to "struct.pack" has incompatible type "str"; expected "float" (for format char "f")
+struct.pack("c", 1)  # E: Argument 1 to "struct.pack" has incompatible type "int"; expected "bytes" (for format char "c")
+[builtins fixtures/tuple.pyi]
+
+[case testStructPackArgCountMismatch]
+import struct
+struct.pack("ii", 1)  # E: Wrong number of values for format "ii": expected 2, got 1
+struct.pack("i", 1, 2)  # E: Wrong number of values for format "i": expected 1, got 2
+[builtins fixtures/tuple.pyi]
+
+[case testStructPackIntoArgTypeMismatch]
+import struct
+buf: bytearray
+struct.pack_into("i", buf, 0, "bad")  # E: Argument 1 to "struct.pack_into" has incompatible type "str"; expected "int" (for format char "i")
+struct.pack_into("if", buf, 0, 1, "bad")  # E: Argument 2 to "struct.pack_into" has incompatible type "str"; expected "float" (for format char "f")
+[builtins fixtures/tuple.pyi]
+
+[case testStructClassInstancePack]
+from struct import Struct
+buf: bytearray
+Struct("i").pack("bad")  # E: Argument 1 to "Struct.pack" has incompatible type "str"; expected "int" (for format char "i")
+Struct("i").pack_into(buf, 0, "bad")  # E: Argument 1 to "Struct.pack_into" has incompatible type "str"; expected "int" (for format char "i")
+Struct("ii").pack(1, 2)
+reveal_type(Struct("ii").unpack(b""))  # N: Revealed type is "tuple[builtins.int, builtins.int]"
+[builtins fixtures/tuple.pyi]
+
+[case testStructPackLiteralType]
+from typing import Literal
+import struct
+fmt: Literal["ii"] = "ii"
+struct.pack(fmt, 1, 2)
+reveal_type(struct.unpack(fmt, b""))  # N: Revealed type is "tuple[builtins.int, builtins.int]"
+[builtins fixtures/tuple.pyi]
+[typing fixtures/typing-medium.pyi]
+
+[case testStructPackLiteralUnion]
+from typing import Literal
+import struct
+def f(fmt: Literal["ii", "ff"]) -> None:
+    reveal_type(struct.unpack(fmt, b""))  # N: Revealed type is "tuple[builtins.int, builtins.int] | tuple[builtins.float, builtins.float]"
+    struct.pack(fmt, 1, 2)
+    struct.pack(fmt, "x", "y")  # E: Argument 1 to "struct.pack" has incompatible type "str"; expected "int" (for format char "i") \
+                                # E: Argument 2 to "struct.pack" has incompatible type "str"; expected "int" (for format char "i")
+[builtins fixtures/tuple.pyi]
+[typing fixtures/typing-medium.pyi]
+
+[case testStructBoolFormat]
+import struct
+struct.pack("?", True)
+struct.pack("?", 0)
+struct.pack("?", "s")  # E: Argument 1 to "struct.pack" has incompatible type "str"; expected "bool" (for format char "?")
+[builtins fixtures/tuple.pyi]
+
+[case testStructFinalFormat]
+from typing import Final
+import struct
+FMT: Final = "ii"
+reveal_type(struct.unpack(FMT, b""))  # N: Revealed type is "tuple[builtins.int, builtins.int]"
+struct.pack(FMT, 1, 2)
+[builtins fixtures/tuple.pyi]
+[typing fixtures/typing-medium.pyi]
+[case testStructPackIntoArgCountMismatch]
+import struct
+buf: bytearray
+struct.pack_into("ii", buf, 0, 1)  # E: Wrong number of values for format "ii": expected 2, got 1
+struct.pack_into("i", buf, 0, 1, 2)  # E: Wrong number of values for format "i": expected 1, got 2
+[builtins fixtures/tuple.pyi]
+
+[case testStructClassInstancePackArgCountMismatch]
+from struct import Struct
+buf: bytearray
+Struct("ii").pack(1)  # E: Wrong number of values for format "ii": expected 2, got 1
+Struct("i").pack(1, 2)  # E: Wrong number of values for format "i": expected 1, got 2
+Struct("ii").pack_into(buf, 0, 1)  # E: Wrong number of values for format "ii": expected 2, got 1
+Struct("i").pack_into(buf, 0, 1, 2)  # E: Wrong number of values for format "i": expected 1, got 2
+[builtins fixtures/tuple.pyi]
+
+[case testStructPackLiteralUnionAcceptedByOneMember]
+from typing import Literal
+import struct
+def f(fmt: Literal["i", "s"]) -> None:
+    struct.pack(fmt, 1)
+    struct.pack(fmt, b"x")
+    struct.pack(fmt, 1.5)  # E: Argument 1 to "struct.pack" has incompatible type "float"; expected "int" (for format char "i")
+[builtins fixtures/tuple.pyi]
+[typing fixtures/typing-medium.pyi]
