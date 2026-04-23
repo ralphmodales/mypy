@@ -448,3 +448,121 @@ def f(v: Any) -> None:
     else:
         reveal_type(v)  # N: Revealed type is "Any"
 [builtins fixtures/primitives.pyi]
+
+[case testNarrowingCustomEqTypeGuardProviderOnLeftNotEqual]
+from typing import Any, Generic, TypeVar
+from typing_extensions import TypeGuard
+
+T = TypeVar("T")
+
+class IsInstance(Generic[T]):
+    def __init__(self, t: type[T]) -> None: pass
+    def __eq__(self, other: Any) -> TypeGuard[T]: pass
+
+def f(v: Any) -> None:
+    if IsInstance(int) != v:
+        reveal_type(v)  # N: Revealed type is "Any"
+    else:
+        reveal_type(v)  # N: Revealed type is "builtins.int"
+[builtins fixtures/primitives.pyi]
+
+[case testNarrowingCustomEqTypeIsProviderOnLeftNotEqual]
+from typing import Any, Union
+from typing_extensions import TypeIs
+
+class IsInt:
+    def __eq__(self, other: Any) -> TypeIs[int]: pass
+
+def f(v: Union[int, str]) -> None:
+    if IsInt() != v:
+        reveal_type(v)  # N: Revealed type is "builtins.str"
+    else:
+        reveal_type(v)  # N: Revealed type is "builtins.int"
+[builtins fixtures/primitives.pyi]
+
+[case testNarrowingCustomContainsTypeGuardNotIn]
+from typing import Any
+from typing_extensions import TypeGuard
+
+class IntBag:
+    def __contains__(self, item: object) -> TypeGuard[int]: pass
+
+def f(x: Any) -> None:
+    if x not in IntBag():
+        reveal_type(x)  # N: Revealed type is "Any"
+    else:
+        reveal_type(x)  # N: Revealed type is "builtins.int"
+[builtins fixtures/primitives.pyi]
+
+[case testNarrowingCustomContainsOverloadedTypeIsMatching]
+from typing import Any, Union, overload
+from typing_extensions import TypeIs
+
+class Matching:
+    @overload
+    def __contains__(self, item: int) -> TypeIs[int]: ...
+    @overload
+    def __contains__(self, item: object) -> TypeIs[int]: ...
+    def __contains__(self, item: Any) -> Any: return True
+
+def f(v: Union[int, str]) -> None:
+    if v in Matching():
+        reveal_type(v)  # N: Revealed type is "builtins.int"
+    else:
+        reveal_type(v)  # N: Revealed type is "builtins.str"
+[builtins fixtures/primitives.pyi]
+
+[case testNarrowingCustomContainsOverloadedTypeIsDisagreeing]
+from typing import Any, Union, overload
+from typing_extensions import TypeIs
+
+class Disagreeing:
+    @overload
+    def __contains__(self, item: int) -> TypeIs[int]: ...
+    @overload
+    def __contains__(self, item: object) -> TypeIs[str]: ...
+    def __contains__(self, item: Any) -> Any: return True
+
+def f(v: Union[int, str]) -> None:
+    if v in Disagreeing():
+        reveal_type(v)  # N: Revealed type is "builtins.int | builtins.str"
+    else:
+        reveal_type(v)  # N: Revealed type is "builtins.int | builtins.str"
+[builtins fixtures/primitives.pyi]
+
+[case testNarrowingCustomContainsUnionTypeIsAgreeing]
+from typing import Union
+from typing_extensions import TypeIs
+
+class IntBag:
+    def __contains__(self, item: object) -> TypeIs[int]: pass
+class OtherIntBag:
+    def __contains__(self, item: object) -> TypeIs[int]: pass
+
+def f(v: Union[int, str], bag: Union[IntBag, OtherIntBag]) -> None:
+    if v in bag:
+        reveal_type(v)  # N: Revealed type is "builtins.int"
+    else:
+        reveal_type(v)  # N: Revealed type is "builtins.str"
+[builtins fixtures/primitives.pyi]
+
+[case testNarrowingCustomEqTypeGuardChainedAdjacencyOnly]
+from typing import Any, Generic, TypeVar
+from typing_extensions import TypeGuard
+
+T = TypeVar("T")
+
+class IsInstance(Generic[T]):
+    def __init__(self, t: type[T]) -> None: pass
+    def __eq__(self, other: Any) -> TypeGuard[T]: pass
+
+def f(a: Any, b: object) -> None:
+    if IsInstance(int) == a == b:
+        reveal_type(a)  # N: Revealed type is "builtins.int"
+        reveal_type(b)  # N: Revealed type is "builtins.object"
+
+def g(a: Any, b: object) -> None:
+    if a == IsInstance(int) == b:
+        reveal_type(a)  # N: Revealed type is "builtins.int"
+        reveal_type(b)  # N: Revealed type is "builtins.int"
+[builtins fixtures/primitives.pyi]

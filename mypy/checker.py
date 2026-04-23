@@ -6676,21 +6676,21 @@ class TypeChecker(NodeVisitor[None], TypeCheckerSharedApi):
                                 narrowable_indices={0},
                             )
 
-                        # TODO: This remove_optional code should no longer be needed. The only
-                        # thing it does is paper over a pre-existing deficiency in equality
-                        # narrowing w.r.t to enums.
-                        # We only try and narrow away 'None' for now
-                        if (
-                            not is_unreachable_map(if_map)
-                            and is_overlapping_none(item_type)
-                            and not is_overlapping_none(collection_item_type)
-                            and not (
-                                isinstance(collection_item_type, Instance)
-                                and collection_item_type.type.fullname == "builtins.object"
-                            )
-                            and is_overlapping_erased_types(item_type, collection_item_type)
-                        ):
-                            if_map[operands[left_index]] = remove_optional(item_type)
+                            # TODO: This remove_optional code should no longer be needed. The only
+                            # thing it does is paper over a pre-existing deficiency in equality
+                            # narrowing w.r.t to enums.
+                            # We only try and narrow away 'None' for now
+                            if (
+                                not is_unreachable_map(if_map)
+                                and is_overlapping_none(item_type)
+                                and not is_overlapping_none(collection_item_type)
+                                and not (
+                                    isinstance(collection_item_type, Instance)
+                                    and collection_item_type.type.fullname == "builtins.object"
+                                )
+                                and is_overlapping_erased_types(item_type, collection_item_type)
+                            ):
+                                if_map[operands[left_index]] = remove_optional(item_type)
 
                 if right_index in narrowable_operand_index_to_hash:
                     if_type, else_type = self.conditional_types_for_iterable(
@@ -6939,16 +6939,19 @@ class TypeChecker(NodeVisitor[None], TypeCheckerSharedApi):
                         all_if_maps.append(if_map)
 
         custom_eq_typeguard_narrowed: set[int] = set()
-        for i in expr_indices:
+        for pos_i, i in enumerate(expr_indices):
             if i not in custom_eq_indices:
                 continue
             i_type_guard, i_type_is = self._eq_type_guard_or_is(operand_types[i])
             if i_type_guard is None and i_type_is is None:
                 continue
+            adjacent_indices: list[int] = []
+            if pos_i - 1 >= 0:
+                adjacent_indices.append(expr_indices[pos_i - 1])
+            if pos_i + 1 < len(expr_indices):
+                adjacent_indices.append(expr_indices[pos_i + 1])
             contributed = False
-            for j in expr_indices:
-                if i == j:
-                    continue
+            for j in adjacent_indices:
                 if j not in narrowable_indices:
                     continue
                 target_expr = operands[j]
