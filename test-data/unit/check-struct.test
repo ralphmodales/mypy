@@ -379,3 +379,47 @@ s = Struct("3i")
 reveal_type(s.format)  # N: Revealed type is "Literal['3i']"
 reveal_type(Struct(b"ii").format)  # N: Revealed type is "Literal['ii']"
 [builtins fixtures/tuple.pyi]
+
+[case testStructCalcsizeWhitespaceAndPad]
+import struct
+reveal_type(struct.calcsize("<  2i  "))  # N: Revealed type is "Literal[8]"
+reveal_type(struct.calcsize("<i 2x h"))  # N: Revealed type is "Literal[8]"
+reveal_type(struct.calcsize("<"))  # N: Revealed type is "Literal[0]"
+reveal_type(struct.calcsize("<0i"))  # N: Revealed type is "Literal[0]"
+reveal_type(struct.calcsize("<0s"))  # N: Revealed type is "Literal[0]"
+reveal_type(struct.calcsize("<?c b B"))  # N: Revealed type is "Literal[4]"
+[builtins fixtures/tuple.pyi]
+
+[case testStructInstanceSizeAndFormatTogether]
+from typing import Final
+from struct import Struct
+import struct
+s = Struct("<2i")
+reveal_type(s.format)  # N: Revealed type is "Literal['<2i']"
+reveal_type(s.size)  # N: Revealed type is "Literal[8]"
+reveal_type(s.unpack(b""))  # N: Revealed type is "tuple[builtins.int, builtins.int]"
+reveal_type(struct.calcsize(s.format))  # N: Revealed type is "Literal[8]"
+FMT_IT: Final = "<3f"
+s2 = Struct(FMT_IT)
+reveal_type(s2.format)  # N: Revealed type is "Literal['<3f']"
+reveal_type(s2.size)  # N: Revealed type is "Literal[12]"
+[builtins fixtures/tuple.pyi]
+[typing fixtures/typing-medium.pyi]
+
+[case testStructInstanceSizeFromBytesFormat]
+from struct import Struct
+reveal_type(Struct(b"<ii").size)  # N: Revealed type is "Literal[8]"
+reveal_type(Struct(b">3f").size)  # N: Revealed type is "Literal[12]"
+reveal_type(Struct(b"<5s").size)  # N: Revealed type is "Literal[5]"
+[builtins fixtures/tuple.pyi]
+
+[case testStructCalcsizeAllStandardOrderChars]
+import struct
+reveal_type(struct.calcsize("<q"))  # N: Revealed type is "Literal[8]"
+reveal_type(struct.calcsize(">q"))  # N: Revealed type is "Literal[8]"
+reveal_type(struct.calcsize("=q"))  # N: Revealed type is "Literal[8]"
+reveal_type(struct.calcsize("!q"))  # N: Revealed type is "Literal[8]"
+reveal_type(struct.calcsize("<d"))  # N: Revealed type is "Literal[8]"
+reveal_type(struct.calcsize("<e"))  # N: Revealed type is "Literal[2]"
+reveal_type(struct.calcsize("<?"))  # N: Revealed type is "Literal[1]"
+[builtins fixtures/tuple.pyi]
