@@ -4,11 +4,12 @@ from typing import Final
 
 from mypy.messages import format_type_bare
 from mypy.nodes import ARG_POS, ARG_STAR, BytesExpr, Context, Expression, StrExpr
-from mypy.plugin import FunctionContext, MethodContext
+from mypy.plugin import AttributeContext, FunctionContext, MethodContext
 from mypy.subtypes import is_subtype
 from mypy.typeops import make_simplified_union, try_getting_str_literals_from_type
 from mypy.types import (
     AnyType,
+    ExtraAttrs,
     Instance,
     LiteralType,
     TupleType,
@@ -18,15 +19,15 @@ from mypy.types import (
 )
 
 _BYTE_ORDER_PREFIX_CHARS: Final = frozenset("@=<>!")
+_STANDARD_BYTE_ORDER_CHARS: Final = frozenset("=<>!")
 _ASCII_WHITESPACE_CHARS: Final = frozenset(" \t\n\r\v\f")
 _PAD_FORMAT_CHAR: Final = "x"
 _BYTE_LENGTH_FORMAT_CHARS: Final = frozenset("sp")
-_MAX_REPEAT: Final = 32
+_MAX_REPEAT: Final = 99
 
 _INTEGER_FORMAT_CHARS: Final = frozenset("bBhHiIlLqQnNP")
 _FLOAT_FORMAT_CHARS: Final = frozenset("efd")
 _BOOL_FORMAT_CHARS: Final = frozenset("?")
-_BYTES_FORMAT_CHARS: Final = frozenset("csp")
 
 _FORMAT_CHAR_TO_FULLNAME: Final[dict[str, str]] = {
     "b": "builtins.int",
@@ -51,19 +52,40 @@ _FORMAT_CHAR_TO_FULLNAME: Final[dict[str, str]] = {
     "p": "builtins.bytes",
 }
 
+_FORMAT_CHAR_TO_STANDARD_SIZE: Final[dict[str, int]] = {
+    "c": 1,
+    "b": 1,
+    "B": 1,
+    "?": 1,
+    "h": 2,
+    "H": 2,
+    "i": 4,
+    "I": 4,
+    "l": 4,
+    "L": 4,
+    "q": 8,
+    "Q": 8,
+    "e": 2,
+    "f": 4,
+    "d": 8,
+}
+
 STRUCT_UNPACK_FULLNAME: Final = "_struct.unpack"
 STRUCT_UNPACK_FROM_FULLNAME: Final = "_struct.unpack_from"
 STRUCT_ITER_UNPACK_FULLNAME: Final = "_struct.iter_unpack"
 STRUCT_PACK_FULLNAME: Final = "_struct.pack"
 STRUCT_PACK_INTO_FULLNAME: Final = "_struct.pack_into"
+STRUCT_CALCSIZE_FULLNAME: Final = "_struct.calcsize"
 STRUCT_CLASS_FULLNAME: Final = "_struct.Struct"
 STRUCT_CLASS_UNPACK_FULLNAME: Final = "_struct.Struct.unpack"
 STRUCT_CLASS_UNPACK_FROM_FULLNAME: Final = "_struct.Struct.unpack_from"
 STRUCT_CLASS_ITER_UNPACK_FULLNAME: Final = "_struct.Struct.iter_unpack"
 STRUCT_CLASS_PACK_FULLNAME: Final = "_struct.Struct.pack"
 STRUCT_CLASS_PACK_INTO_FULLNAME: Final = "_struct.Struct.pack_into"
+STRUCT_CLASS_SIZE_FULLNAME: Final = "_struct.Struct.size"
+STRUCT_CLASS_FORMAT_FULLNAME: Final = "_struct.Struct.format"
 
-_STRUCT_FMT_ATTR: Final = "__mypy_struct_fmt"
+_STRUCT_FMT_TOKEN_PREFIX: Final = "__struct_fmt:"
 
 
 def _read_byte_order_prefix(format_string: str, start: int) -> int:
@@ -116,6 +138,39 @@ def _parse_struct_format(format_string: str) -> list[str] | None:
     if len(element_chars) > _MAX_REPEAT:
         return None
     return element_chars
+
+
+def _calcsize_for_format(format_string: str) -> int | None:
+    length = len(format_string)
+    if length == 0:
+        return 0
+    if format_string[0] not in _STANDARD_BYTE_ORDER_CHARS:
+        return None
+    position = 1
+    total = 0
+    while position < length:
+        current_char = format_string[position]
+        if current_char in _ASCII_WHITESPACE_CHARS:
+            position += 1
+            continue
+        repeat_count, position_after_digits = _read_decimal_repeat(format_string, position)
+        if repeat_count is not None:
+            if position_after_digits >= length:
+                return None
+            position = position_after_digits
+            current_char = format_string[position]
+        else:
+            repeat_count = 1
+        if current_char == _PAD_FORMAT_CHAR:
+            total += repeat_count
+        elif current_char in _BYTE_LENGTH_FORMAT_CHARS:
+            total += repeat_count
+        elif current_char in _FORMAT_CHAR_TO_STANDARD_SIZE:
+            total += _FORMAT_CHAR_TO_STANDARD_SIZE[current_char] * repeat_count
+        else:
+            return None
+        position += 1
+    return total
 
 
 def _extract_literal_formats_from_expr(
@@ -173,32 +228,37 @@ def _build_unpack_return_type(
     return make_simplified_union(tuple_types)
 
 
-def _build_fmt_marker_type(ctx: FunctionContext, chars: list[str]) -> TupleType:
-    str_type = ctx.api.named_generic_type("builtins.str", [])
-    fallback = ctx.api.named_generic_type("builtins.tuple", [str_type])
-    items: list[Type] = [LiteralType(c, str_type) for c in chars]
-    return TupleType(items, fallback)
+def _attach_format_to_instance(instance: Instance, format_string: str) -> Instance:
+    if instance.extra_attrs is not None:
+        attrs = instance.extra_attrs.copy()
+    else:
+        attrs = ExtraAttrs({}, set(), None)
+    token = _STRUCT_FMT_TOKEN_PREFIX + format_string
+    attrs.immutable.add(token)
+    new_instance = instance.copy_modified()
+    new_instance.extra_attrs = attrs
+    return new_instance
+
+
+def _get_stored_format_string(
+    instance_type: Type | None,
+) -> str | None:
+    proper = get_proper_type(instance_type) if instance_type is not None else None
+    if not isinstance(proper, Instance):
+        return None
+    if proper.extra_attrs is None:
+        return None
+    for token in proper.extra_attrs.immutable:
+        if token.startswith(_STRUCT_FMT_TOKEN_PREFIX):
+            return token[len(_STRUCT_FMT_TOKEN_PREFIX):]
+    return None
 
 
 def _get_stored_fmt_chars(ctx: MethodContext) -> list[str] | None:
-    if not isinstance(ctx.type, Instance):
+    format_string = _get_stored_format_string(ctx.type)
+    if format_string is None:
         return None
-    if not ctx.type.extra_attrs:
-        return None
-    if _STRUCT_FMT_ATTR not in ctx.type.extra_attrs.attrs:
-        return None
-    stored = get_proper_type(ctx.type.extra_attrs.attrs[_STRUCT_FMT_ATTR])
-    if not isinstance(stored, TupleType):
-        return None
-    chars: list[str] = []
-    for item in stored.items:
-        item_proper = get_proper_type(item)
-        if not isinstance(item_proper, LiteralType):
-            return None
-        if not isinstance(item_proper.value, str):
-            return None
-        chars.append(item_proper.value)
-    return chars
+    return _parse_struct_format(format_string)
 
 
 def _infer_unpack_tuple_from_func_ctx(ctx: FunctionContext) -> Type | None:
@@ -232,6 +292,22 @@ def struct_iter_unpack_callback(ctx: FunctionContext) -> Type:
     return ctx.api.named_generic_type("typing.Iterator", [result])
 
 
+def struct_calcsize_callback(ctx: FunctionContext) -> Type:
+    formats = _extract_formats_from_func_ctx(ctx)
+    if formats is None or not formats:
+        return ctx.default_return_type
+    int_instance = ctx.api.named_generic_type("builtins.int", [])
+    literal_sizes: list[Type] = []
+    for fmt in formats:
+        size = _calcsize_for_format(fmt)
+        if size is None:
+            return ctx.default_return_type
+        literal_sizes.append(LiteralType(size, int_instance))
+    if len(literal_sizes) == 1:
+        return literal_sizes[0]
+    return make_simplified_union(literal_sizes)
+
+
 def struct_class_callback(ctx: FunctionContext) -> Type:
     default = ctx.default_return_type
     default_proper = get_proper_type(default)
@@ -243,8 +319,7 @@ def struct_class_callback(ctx: FunctionContext) -> Type:
     chars = _parse_struct_format(formats[0])
     if chars is None:
         return default
-    marker = _build_fmt_marker_type(ctx, chars)
-    return default_proper.copy_with_extra_attr(_STRUCT_FMT_ATTR, marker)
+    return _attach_format_to_instance(default_proper, formats[0])
 
 
 def _infer_unpack_tuple_from_stored(ctx: MethodContext) -> Type | None:
@@ -273,6 +348,25 @@ def struct_class_iter_unpack_callback(ctx: MethodContext) -> Type:
     if result is None:
         return ctx.default_return_type
     return ctx.api.named_generic_type("typing.Iterator", [result])
+
+
+def struct_class_size_callback(ctx: AttributeContext) -> Type:
+    int_type = ctx.api.named_generic_type("builtins.int", [])
+    format_string = _get_stored_format_string(ctx.type)
+    if format_string is None:
+        return int_type
+    size = _calcsize_for_format(format_string)
+    if size is None:
+        return int_type
+    return LiteralType(size, int_type)
+
+
+def struct_class_format_callback(ctx: AttributeContext) -> Type:
+    str_type = ctx.api.named_generic_type("builtins.str", [])
+    format_string = _get_stored_format_string(ctx.type)
+    if format_string is None:
+        return str_type
+    return LiteralType(format_string, str_type)
 
 
 def _expected_type_name_for_char(char: str) -> str:
@@ -330,11 +424,12 @@ def _validate_pack_for_chars(
     values: list[Expression],
     value_types: list[Type],
     fmt_string: str,
+    saw_star: bool,
 ) -> list[_PackError]:
     errors: list[_PackError] = []
     expected_count = len(chars)
     got_count = len(value_types)
-    if expected_count != got_count:
+    if not saw_star and expected_count != got_count:
         errors.append(
             (
                 f'Wrong number of values for format "{fmt_string}":'
@@ -342,8 +437,8 @@ def _validate_pack_for_chars(
                 ctx.context,
             )
         )
-        return errors
-    for index in range(got_count):
+    check_count = min(expected_count, got_count)
+    for index in range(check_count):
         value_type = value_types[index]
         char = chars[index]
         if not _value_type_matches_char(ctx, value_type, char):
@@ -369,12 +464,10 @@ def _emit_pack_errors(
     value_types: list[Type],
     saw_star: bool,
 ) -> None:
-    if saw_star:
-        return
     first_errors: list[_PackError] | None = None
     for chars, fmt_str in zip(all_formats, format_strings):
         errors = _validate_pack_for_chars(
-            ctx, chars, method_name, values, value_types, fmt_str
+            ctx, chars, method_name, values, value_types, fmt_str, saw_star
         )
         if not errors:
             return
@@ -438,12 +531,12 @@ def struct_class_pack_callback(ctx: MethodContext) -> Type:
     chars = _get_stored_fmt_chars(ctx)
     if chars is None:
         return ctx.default_return_type
-    fmt_string = "".join(chars)
+    format_string = _get_stored_format_string(ctx.type) or "".join(chars)
     values, value_types, saw_star = _collect_positional_values(ctx, start_group=0)
     _emit_pack_errors(
         ctx,
         [chars],
-        [fmt_string],
+        [format_string],
         "Struct.pack",
         values,
         value_types,
@@ -456,12 +549,12 @@ def struct_class_pack_into_callback(ctx: MethodContext) -> Type:
     chars = _get_stored_fmt_chars(ctx)
     if chars is None:
         return ctx.default_return_type
-    fmt_string = "".join(chars)
+    format_string = _get_stored_format_string(ctx.type) or "".join(chars)
     values, value_types, saw_star = _collect_positional_values(ctx, start_group=2)
     _emit_pack_errors(
         ctx,
         [chars],
-        [fmt_string],
+        [format_string],
         "Struct.pack_into",
         values,
         value_types,

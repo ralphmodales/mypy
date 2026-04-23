@@ -62,10 +62,13 @@ from mypy.plugins.singledispatch import (
     singledispatch_register_callback,
 )
 from mypy.plugins.struct import (
+    STRUCT_CALCSIZE_FULLNAME,
+    STRUCT_CLASS_FORMAT_FULLNAME,
     STRUCT_CLASS_FULLNAME,
     STRUCT_CLASS_ITER_UNPACK_FULLNAME,
     STRUCT_CLASS_PACK_FULLNAME,
     STRUCT_CLASS_PACK_INTO_FULLNAME,
+    STRUCT_CLASS_SIZE_FULLNAME,
     STRUCT_CLASS_UNPACK_FROM_FULLNAME,
     STRUCT_CLASS_UNPACK_FULLNAME,
     STRUCT_ITER_UNPACK_FULLNAME,
@@ -73,10 +76,13 @@ from mypy.plugins.struct import (
     STRUCT_PACK_INTO_FULLNAME,
     STRUCT_UNPACK_FROM_FULLNAME,
     STRUCT_UNPACK_FULLNAME,
+    struct_calcsize_callback,
     struct_class_callback,
+    struct_class_format_callback,
     struct_class_iter_unpack_callback,
     struct_class_pack_callback,
     struct_class_pack_into_callback,
+    struct_class_size_callback,
     struct_class_unpack_callback,
     struct_class_unpack_from_callback,
     struct_iter_unpack_callback,
@@ -141,6 +147,8 @@ class DefaultPlugin(Plugin):
             return struct_pack_callback
         elif fullname == STRUCT_PACK_INTO_FULLNAME:
             return struct_pack_into_callback
+        elif fullname == STRUCT_CALCSIZE_FULLNAME:
+            return struct_calcsize_callback
         elif fullname == STRUCT_CLASS_FULLNAME:
             return struct_class_callback
         return None
@@ -221,6 +229,10 @@ class DefaultPlugin(Plugin):
             return enum_name_callback
         elif fullname in ENUM_VALUE_ACCESS:
             return enum_value_callback
+        elif fullname == STRUCT_CLASS_SIZE_FULLNAME:
+            return struct_class_size_callback
+        elif fullname == STRUCT_CLASS_FORMAT_FULLNAME:
+            return struct_class_format_callback
         return None
 
     def get_class_decorator_hook(self, fullname: str) -> Callable[[ClassDefContext], None] | None:
