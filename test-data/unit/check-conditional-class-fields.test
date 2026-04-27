@@ -1,0 +1,362 @@
+[case testConditionalNamedTupleSysVersionPresent]
+# flags: --python-version 3.12
+import sys
+from typing import NamedTuple
+
+class N(NamedTuple):
+    x: int
+    if sys.version_info >= (3, 12):
+        y: str
+
+n = N(1, "hello")
+reveal_type(n)  # N: Revealed type is "tuple[builtins.int, builtins.str, fallback=__main__.N]"
+reveal_type(n._replace(y="world"))  # N: Revealed type is "tuple[builtins.int, builtins.str, fallback=__main__.N]"
+reveal_type(n.y)  # N: Revealed type is "builtins.str"
+N(1)  # E: Missing positional argument "y" in call to "N"
+[builtins fixtures/tuple.pyi]
+
+[case testConditionalNamedTupleSysVersionAbsent]
+# flags: --python-version 3.11
+import sys
+from typing import NamedTuple
+
+class N(NamedTuple):
+    x: int
+    if sys.version_info >= (3, 12):
+        y: str
+
+n = N(1)
+reveal_type(n)  # N: Revealed type is "tuple[builtins.int, fallback=__main__.N]"
+reveal_type(n._replace())  # N: Revealed type is "tuple[builtins.int, fallback=__main__.N]"
+n.y  # E: "N" has no attribute "y"
+N(1, "extra")  # E: Too many arguments for "N"
+[builtins fixtures/tuple.pyi]
+
+[case testConditionalNamedTupleNonDefaultFollowsDefault]
+# flags: --python-version 3.12
+import sys
+from typing import NamedTuple
+
+class N(NamedTuple):
+    x: int
+    if sys.version_info >= (3, 12):
+        y: str = "hello"
+    z: int  # E: Non-default NamedTuple fields cannot follow default fields
+
+class OK(NamedTuple):
+    x: int
+    if sys.version_info >= (3, 12):
+        y: str = "world"
+
+ok = OK(1)
+reveal_type(ok)  # N: Revealed type is "tuple[builtins.int, builtins.str, fallback=__main__.OK]"
+[builtins fixtures/tuple.pyi]
+
+[case testConditionalNamedTupleStaticTruthForms]
+# flags: --always-false STATIC_FALSE
+from typing import NamedTuple, TYPE_CHECKING
+
+STATIC_FALSE = True
+
+class A(NamedTuple):
+    x: int
+    if TYPE_CHECKING:
+        y: str
+
+class B(NamedTuple):
+    x: int
+    if STATIC_FALSE:
+        y: str
+
+class C(NamedTuple):
+    x: int
+    if not TYPE_CHECKING:
+        y: str
+
+a = A(1, "hi")
+reveal_type(a)  # N: Revealed type is "tuple[builtins.int, builtins.str, fallback=__main__.A]"
+b = B(1)
+reveal_type(b)  # N: Revealed type is "tuple[builtins.int, fallback=__main__.B]"
+B(1, "extra")  # E: Too many arguments for "B"
+c = C(1)
+reveal_type(c)  # N: Revealed type is "tuple[builtins.int, fallback=__main__.C]"
+C(1, "extra")  # E: Too many arguments for "C"
+[builtins fixtures/tuple.pyi]
+
+[case testConditionalNamedTupleElseBranch]
+# flags: --python-version 3.11
+import sys
+from typing import NamedTuple
+
+class N(NamedTuple):
+    x: int
+    if sys.version_info >= (3, 12):
+        modern: str
+    else:
+        legacy: int
+
+n = N(1, 42)
+reveal_type(n)  # N: Revealed type is "tuple[builtins.int, builtins.int, fallback=__main__.N]"
+reveal_type(n.legacy)  # N: Revealed type is "builtins.int"
+n.modern  # E: "N" has no attribute "modern"
+[builtins fixtures/tuple.pyi]
+
+[case testConditionalNamedTupleElifChain312]
+# flags: --python-version 3.12
+import sys
+from typing import NamedTuple
+
+class N(NamedTuple):
+    x: int
+    if sys.version_info >= (3, 13):
+        a: str
+    elif sys.version_info >= (3, 12):
+        b: bool
+    elif sys.version_info >= (3, 11):
+        c: int
+    else:
+        d: int
+
+n = N(1, True)
+reveal_type(n)  # N: Revealed type is "tuple[builtins.int, builtins.bool, fallback=__main__.N]"
+n.a  # E: "N" has no attribute "a"
+n.c  # E: "N" has no attribute "c"
+[builtins fixtures/tuple.pyi]
+
+[case testConditionalNamedTupleElifChain311]
+# flags: --python-version 3.11
+import sys
+from typing import NamedTuple
+
+class N(NamedTuple):
+    x: int
+    if sys.version_info >= (3, 13):
+        a: str
+    elif sys.version_info >= (3, 12):
+        b: bool
+    elif sys.version_info >= (3, 11):
+        c: int
+    else:
+        d: int
+
+n = N(1, 42)
+reveal_type(n)  # N: Revealed type is "tuple[builtins.int, builtins.int, fallback=__main__.N]"
+reveal_type(n.c)  # N: Revealed type is "builtins.int"
+[builtins fixtures/tuple.pyi]
+
+[case testConditionalNamedTupleSubclassInheritance]
+# flags: --python-version 3.12
+import sys
+from typing import NamedTuple
+
+class Parent(NamedTuple):
+    x: int
+    if sys.version_info >= (3, 12):
+        y: str
+
+class Child(Parent):
+    def label(self) -> str:
+        return self.y
+
+c = Child(1, "hi")
+reveal_type(c)  # N: Revealed type is "tuple[builtins.int, builtins.str, fallback=__main__.Child]"
+reveal_type(c._replace(y="world"))  # N: Revealed type is "tuple[builtins.int, builtins.str, fallback=__main__.Child]"
+reveal_type(c._asdict())  # N: Revealed type is "builtins.dict[builtins.str, Any]"
+reveal_type(c.label())  # N: Revealed type is "builtins.str"
+[builtins fixtures/tuple.pyi]
+
+[case testConditionalNamedTupleDuplicateFieldName]
+from typing import NamedTuple, TYPE_CHECKING
+
+class N(NamedTuple):
+    x: int
+    if TYPE_CHECKING:
+        x: str  # E: Duplicate NamedTuple field "x"
+[builtins fixtures/tuple.pyi]
+
+[case testConditionalTypedDictSysVersionPresent]
+# flags: --python-version 3.12
+import sys
+from typing import TypedDict
+
+class D(TypedDict):
+    x: int
+    if sys.version_info >= (3, 12):
+        y: str
+
+d1: D = {"x": 1, "y": "hello"}
+d2: D = {"x": 1}  # E: Missing key "y" for TypedDict "D"
+d3: D = {"x": 1, "y": "hi", "z": 2}  # E: Extra key "z" for TypedDict "D"
+[builtins fixtures/dict.pyi]
+[typing fixtures/typing-typeddict.pyi]
+
+[case testConditionalTypedDictSysVersionAbsent]
+# flags: --python-version 3.11
+import sys
+from typing import TypedDict
+
+class D(TypedDict):
+    x: int
+    if sys.version_info >= (3, 12):
+        y: str
+
+d1: D = {"x": 1}
+d2: D = {"x": 1, "y": "hi"}  # E: Extra key "y" for TypedDict "D"
+[builtins fixtures/dict.pyi]
+[typing fixtures/typing-typeddict.pyi]
+
+[case testConditionalTypedDictRequiredNotRequiredReadOnly]
+# flags: --python-version 3.12
+import sys
+from typing import TypedDict
+from typing_extensions import Required, NotRequired, ReadOnly
+
+class D(TypedDict):
+    x: int
+    if sys.version_info >= (3, 12):
+        y: NotRequired[str]
+        z: ReadOnly[int]
+
+d1: D = {"x": 1, "z": 5}
+d2: D = {"x": 1, "y": "hi", "z": 5}
+d2["z"] = 10  # E: ReadOnly TypedDict key "z" TypedDict is mutated
+
+class D2(TypedDict, total=False):
+    x: int
+    if sys.version_info >= (3, 12):
+        y: Required[str]
+
+d3: D2 = {"x": 1, "y": "hi"}
+d4: D2 = {"x": 1}  # E: Missing key "y" for TypedDict "D2"
+[builtins fixtures/dict.pyi]
+[typing fixtures/typing-typeddict.pyi]
+
+[case testConditionalTypedDictInheritanceUnion]
+# flags: --python-version 3.12
+import sys
+from typing import TypedDict
+
+class Parent(TypedDict):
+    a: int
+    if sys.version_info >= (3, 12):
+        b: str
+
+class Child(Parent):
+    c: int
+    if sys.version_info >= (3, 12):
+        d: bool
+
+ch: Child = {"a": 1, "b": "hi", "c": 2, "d": True}
+ch2: Child = {"a": 1, "c": 2}  # E: Missing keys ("b", "d") for TypedDict "Child"
+[builtins fixtures/dict.pyi]
+[typing fixtures/typing-typeddict.pyi]
+
+[case testConditionalTypedDictOverwriteParentKey]
+# flags: --python-version 3.12
+import sys
+from typing import TypedDict
+
+class Parent(TypedDict):
+    x: int
+
+class Child(Parent):
+    if sys.version_info >= (3, 12):
+        x: str  # E: Overwriting TypedDict field "x" while extending
+[builtins fixtures/dict.pyi]
+[typing fixtures/typing-typeddict.pyi]
+
+[case testConditionalNestedIfsAndElifResolved]
+# flags: --python-version 3.12
+import sys
+from typing import NamedTuple, TYPE_CHECKING
+
+class N(NamedTuple):
+    x: int
+    if TYPE_CHECKING:
+        if sys.version_info >= (3, 12):
+            y: str
+        else:
+            z: int
+
+n = N(1, "hi")
+reveal_type(n)  # N: Revealed type is "tuple[builtins.int, builtins.str, fallback=__main__.N]"
+n.z  # E: "N" has no attribute "z"
+
+class M(NamedTuple):
+    a: int
+    if sys.version_info >= (3, 13):
+        first: str
+    elif sys.version_info >= (3, 12):
+        second: bool
+    elif sys.version_info >= (3, 11):
+        third: int
+
+m = M(1, True)
+reveal_type(m)  # N: Revealed type is "tuple[builtins.int, builtins.bool, fallback=__main__.M]"
+[builtins fixtures/tuple.pyi]
+
+[case testConditionalUnresolvableNamedTuple]
+# flags: --show-error-codes
+from typing import NamedTuple
+
+def some_runtime_flag() -> bool: ...
+
+class N(NamedTuple):
+    x: int
+    if some_runtime_flag():  # E: Conditional definition in NamedTuple body requires a statically-knowable condition  [conditional-class-body]
+        y: str
+    z: int
+
+n = N(1, 2)
+reveal_type(n)  # N: Revealed type is "tuple[builtins.int, builtins.int, fallback=__main__.N]"
+[builtins fixtures/tuple.pyi]
+
+[case testConditionalUnresolvableTypedDict]
+# flags: --show-error-codes
+from typing import TypedDict
+
+def some_runtime_flag() -> bool: ...
+
+class D(TypedDict):
+    x: int
+    if some_runtime_flag():  # E: Conditional definition in TypedDict body requires a statically-knowable condition  [conditional-class-body]
+        y: str
+    z: int
+
+d: D = {"x": 1, "z": 2}
+[builtins fixtures/dict.pyi]
+[typing fixtures/typing-typeddict.pyi]
+
+[case testConditionalIdempotenceWithDeferral]
+# flags: --python-version 3.12
+import sys
+from typing import NamedTuple, TYPE_CHECKING
+
+class Holder:
+    if TYPE_CHECKING:
+        nt: "N"
+
+class N(NamedTuple):
+    x: int
+    if sys.version_info >= (3, 12):
+        y: str
+
+n = N(1, "hi")
+reveal_type(n)  # N: Revealed type is "tuple[builtins.int, builtins.str, fallback=__main__.N]"
+reveal_type(n._replace(y="world"))  # N: Revealed type is "tuple[builtins.int, builtins.str, fallback=__main__.N]"
+[builtins fixtures/tuple.pyi]
+
+[case testConditionalStrictNoFalsePositive]
+# flags: --strict --python-version 3.12
+import sys
+from typing import NamedTuple
+
+class N(NamedTuple):
+    x: int
+    if sys.version_info >= (3, 12):
+        y: str
+
+n: N = N(1, "hi")
+reveal_type(n)  # N: Revealed type is "tuple[builtins.int, builtins.str, fallback=__main__.N]"
+reveal_type(n._replace(y="world"))  # N: Revealed type is "tuple[builtins.int, builtins.str, fallback=__main__.N]"
+[builtins fixtures/tuple.pyi]

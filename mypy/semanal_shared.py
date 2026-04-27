@@ -8,8 +8,9 @@ from typing import Final, Literal, Protocol, overload
 
 from mypy_extensions import trait
 
-from mypy.errorcodes import LITERAL_REQ, ErrorCode
+from mypy.errorcodes import CONDITIONAL_CLASS_BODY, LITERAL_REQ, ErrorCode
 from mypy.nodes import (
+    Block,
     CallExpr,
     ClassDef,
     Context,
@@ -17,10 +18,12 @@ from mypy.nodes import (
     Decorator,
     Expression,
     FuncDef,
+    IfStmt,
     NameExpr,
     Node,
     OverloadedFuncDef,
     RefExpr,
+    Statement,
     SymbolNode,
     SymbolTable,
     SymbolTableNode,
@@ -493,3 +496,66 @@ def parse_bool(expr: Expression) -> bool | None:
         if expr.fullname == "builtins.False":
             return False
     return None
+
+
+_CONDITIONAL_CLASS_BODY_MSG: Final = (
+    "Conditional definition in {form} body requires a statically-knowable condition"
+)
+
+
+def _resolve_class_body_if_branch(stmt: IfStmt) -> tuple[Block | None, bool]:
+    reachable_bodies: list[Block] = []
+    for body in stmt.body:
+        if not body.is_unreachable:
+            reachable_bodies.append(body)
+
+    has_else_block = stmt.else_body is not None
+    else_reachable: bool
+    else_block: Block | None
+    if has_else_block:
+        assert stmt.else_body is not None
+        else_block = stmt.else_body
+        else_reachable = not stmt.else_body.is_unreachable
+    else:
+        else_block = None
+        else_reachable = True
+
+    total_reachable = len(reachable_bodies) + (1 if else_reachable else 0)
+
+    if total_reachable == 0:
+        return None, True
+    if total_reachable == 1:
+        if len(reachable_bodies) == 1:
+            return reachable_bodies[0], True
+        return else_block, True
+    return None, False
+
+
+def flatten_class_body_if_statements(
+    body: list[Statement],
+    fail: Callable[[str, Context, str], None],
+    form_name: str,
+) -> tuple[list[Statement], list[Statement]]:
+    kept: list[Statement] = []
+    removed: list[Statement] = []
+    for stmt in body:
+        if isinstance(stmt, IfStmt):
+            chosen, resolvable = _resolve_class_body_if_branch(stmt)
+            if not resolvable:
+                fail(
+                    _CONDITIONAL_CLASS_BODY_MSG.format(form=form_name),
+                    stmt,
+                    CONDITIONAL_CLASS_BODY.code,
+                )
+                removed.append(stmt)
+                continue
+            if chosen is None:
+                continue
+            inner_kept, inner_removed = flatten_class_body_if_statements(
+                chosen.body, fail, form_name
+            )
+            kept.extend(inner_kept)
+            removed.extend(inner_removed)
+        else:
+            kept.append(stmt)
+    return kept, removed
