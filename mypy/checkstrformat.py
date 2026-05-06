@@ -36,6 +36,7 @@ from mypy.nodes import (
     ExpressionStmt,
     IndexExpr,
     IntExpr,
+    ListExpr,
     MemberExpr,
     MypyFile,
     NameExpr,
@@ -340,73 +341,165 @@ class StringFormatterChecker:
         assert all(s.key for s in specs), "Keys must be auto-generated first!"
         replacements = self.find_replacements_in_call(call, [cast(str, s.key) for s in specs])
         assert len(replacements) == len(specs)
+        assert isinstance(call.callee, MemberExpr)
+        if isinstance(call.callee.expr, StrExpr):
+            format_str: FormatStringExpr = call.callee.expr
+        else:
+            format_str = StrExpr(format_value)
         for spec, repl in zip(specs, replacements):
             repl = self.apply_field_accessors(spec, repl, ctx=call)
             actual_type = repl.type if isinstance(repl, TempNode) else self.chk.lookup_type(repl)
             assert actual_type is not None
+            self.check_value_against_format_spec(spec, actual_type, repl, format_str, call)
 
-            # Special case custom formatting.
+    def check_value_against_format_spec(
+        self,
+        spec: ConversionSpecifier,
+        actual_type: Type,
+        repl: Expression | None,
+        format_str: FormatStringExpr,
+        context: Context,
+    ) -> None:
+        if (
+            spec.format_spec
+            and spec.non_standard_format_spec
+            and not ("{" in spec.format_spec or "}" in spec.format_spec)
+        ):
             if (
-                spec.format_spec
-                and spec.non_standard_format_spec
-                and
-                # Exclude "dynamic" specifiers (i.e. containing nested formatting).
-                not ("{" in spec.format_spec or "}" in spec.format_spec)
+                not custom_special_method(actual_type, "__format__", check_all=True)
+                or spec.conversion
             ):
-                if (
-                    not custom_special_method(actual_type, "__format__", check_all=True)
-                    or spec.conversion
-                ):
-                    # TODO: add support for some custom specs like datetime?
-                    self.msg.fail(
-                        f'Unrecognized format specification "{spec.format_spec[1:]}"',
-                        call,
-                        code=codes.STRING_FORMATTING,
-                    )
-                    continue
-            # Adjust expected and actual types.
-            if not spec.conv_type:
-                expected_type: Type | None = AnyType(TypeOfAny.special_form)
-            else:
-                assert isinstance(call.callee, MemberExpr)
-                if isinstance(call.callee.expr, StrExpr):
-                    format_str = call.callee.expr
-                else:
-                    format_str = StrExpr(format_value)
-                expected_type = self.conversion_type(
-                    spec.conv_type, call, format_str, format_call=True
+                self.msg.fail(
+                    f'Unrecognized format specification "{spec.format_spec[1:]}"',
+                    context,
+                    code=codes.STRING_FORMATTING,
                 )
-            if spec.conversion is not None:
-                # If the explicit conversion is given, then explicit conversion is called _first_.
-                if spec.conversion[1] not in "rsa":
-                    self.msg.fail(
-                        (
-                            f'Invalid conversion type "{spec.conversion[1]}", '
-                            f'must be one of "r", "s" or "a"'
-                        ),
-                        call,
-                        code=codes.STRING_FORMATTING,
-                    )
-                actual_type = self.named_type("builtins.str")
-
-            # Perform the checks for given types.
-            if expected_type is None:
-                continue
-
-            a_type = get_proper_type(actual_type)
-            actual_items = (
-                get_proper_types(a_type.items) if isinstance(a_type, UnionType) else [a_type]
+                return
+        if not spec.conv_type:
+            expected_type: Type | None = AnyType(TypeOfAny.special_form)
+        else:
+            expected_type = self.conversion_type(
+                spec.conv_type, context, format_str, format_call=True
             )
-            for a_type in actual_items:
-                if custom_special_method(a_type, "__format__"):
-                    continue
-                self.check_placeholder_type(a_type, expected_type, call)
-                self.perform_special_format_checks(spec, call, repl, a_type, expected_type)
+        if spec.conversion is not None:
+            if spec.conversion[1] not in "rsa":
+                self.msg.fail(
+                    (
+                        f'Invalid conversion type "{spec.conversion[1]}", '
+                        f'must be one of "r", "s" or "a"'
+                    ),
+                    context,
+                    code=codes.STRING_FORMATTING,
+                )
+            actual_type = self.named_type("builtins.str")
+        if expected_type is None:
+            return
+        a_type = get_proper_type(actual_type)
+        actual_items = (
+            get_proper_types(a_type.items) if isinstance(a_type, UnionType) else [a_type]
+        )
+        for a_type in actual_items:
+            if custom_special_method(a_type, "__format__"):
+                continue
+            self.check_placeholder_type(a_type, expected_type, context)
+            if repl is not None:
+                self.perform_special_format_checks(spec, context, repl, a_type, expected_type)
+
+    def check_template_str_interpolation(
+        self,
+        value_expr: Expression,
+        value_type: Type,
+        conversion: str | None,
+        format_spec: Expression | None,
+    ) -> None:
+        if conversion is not None and conversion not in ("s", "r", "a"):
+            self.msg.fail(
+                (f'Invalid conversion type "{conversion}", must be one of "r", "s" or "a"'),
+                value_expr,
+                code=codes.STRING_FORMATTING,
+            )
+            return
+
+        if format_spec is None:
+            return
+
+        extracted = self._extract_template_format_spec(format_spec)
+        if extracted is None:
+            return
+        spec_str, nested_exprs = extracted
+
+        int_type = self.named_type("builtins.int")
+        for nested_expr in nested_exprs:
+            nested_type = get_proper_type(self.chk.lookup_type(nested_expr))
+            if isinstance(nested_type, AnyType):
+                continue
+            self.chk.check_subtype(
+                nested_type,
+                int_type,
+                nested_expr,
+                message_registry.INCOMPATIBLE_TYPES_IN_STR_INTERPOLATION,
+                "expression has type",
+                "placeholder has type",
+                code=codes.STRING_FORMATTING,
+            )
+
+        if conversion is not None:
+            return
+
+        synthetic_value = "{:" + spec_str + "}"
+        parsed_specs = parse_format_value(synthetic_value, format_spec, self.msg)
+        if parsed_specs is None:
+            return
+
+        synthetic_format_str = StrExpr(synthetic_value)
+        synthetic_format_str.set_line(format_spec)
+        for parsed_spec in parsed_specs:
+            self.check_value_against_format_spec(
+                parsed_spec, value_type, value_expr, synthetic_format_str, format_spec
+            )
+
+    def _extract_template_format_spec(
+        self, format_spec: Expression
+    ) -> tuple[str, list[Expression]] | None:
+        parts: list[str] = []
+        nested: list[Expression] = []
+
+        def walk(expr: Expression) -> bool:
+            if isinstance(expr, StrExpr):
+                parts.append(expr.value)
+                return True
+            if isinstance(expr, CallExpr) and isinstance(expr.callee, MemberExpr):
+                method_name = expr.callee.name
+                callee_target = expr.callee.expr
+                if (
+                    method_name == "join"
+                    and isinstance(callee_target, StrExpr)
+                    and callee_target.value == ""
+                    and len(expr.args) == 1
+                    and isinstance(expr.args[0], ListExpr)
+                ):
+                    for item in expr.args[0].items:
+                        if not walk(item):
+                            return False
+                    return True
+                if (
+                    method_name == "format"
+                    and isinstance(callee_target, StrExpr)
+                    and len(expr.args) >= 1
+                ):
+                    parts.append("{}")
+                    nested.append(expr.args[0])
+                    return True
+            return False
+
+        if not walk(format_spec):
+            return None
+        return "".join(parts), nested
 
     def perform_special_format_checks(
         self,
         spec: ConversionSpecifier,
-        call: CallExpr,
+        context: Context,
         repl: Expression,
         actual_type: Type,
         expected_type: Type,
@@ -414,13 +507,13 @@ class StringFormatterChecker:
         # TODO: try refactoring to combine this logic with % formatting.
         if spec.conv_type == "c":
             if isinstance(repl, (StrExpr, BytesExpr)) and len(repl.value) != 1:
-                self.msg.requires_int_or_char(call, format_call=True)
+                self.msg.requires_int_or_char(context, format_call=True)
             c_typ = get_proper_type(self.chk.lookup_type(repl))
             if isinstance(c_typ, Instance) and c_typ.last_known_value:
                 c_typ = c_typ.last_known_value
             if isinstance(c_typ, LiteralType) and isinstance(c_typ.value, str):
                 if len(c_typ.value) != 1:
-                    self.msg.requires_int_or_char(call, format_call=True)
+                    self.msg.requires_int_or_char(context, format_call=True)
         if (not spec.conv_type or spec.conv_type == "s") and not spec.conversion:
             if has_type_component(actual_type, "builtins.bytes") and not custom_special_method(
                 actual_type, "__str__"
@@ -429,7 +522,7 @@ class StringFormatterChecker:
                     'If x = b\'abc\' then f"{x}" or "{}".format(x) produces "b\'abc\'", '
                     'not "abc". If this is desired behavior, use f"{x!r}" or "{!r}".format(x). '
                     "Otherwise, decode the bytes",
-                    call,
+                    context,
                     code=codes.STR_BYTES_PY3,
                 )
         if spec.flags:
@@ -445,7 +538,7 @@ class StringFormatterChecker:
             ):
                 self.msg.fail(
                     "Numeric flags are only allowed for numeric types",
-                    call,
+                    context,
                     code=codes.STRING_FORMATTING,
                 )
 

@@ -5563,10 +5563,13 @@ class ExpressionChecker(ExpressionVisitor[Type], ExpressionCheckerSharedApi):
         """
         for item in e.items:
             if isinstance(item, tuple):
-                value_expr, _source, _conversion, format_spec = item
-                self.accept(value_expr)
+                value_expr, _source, conversion, format_spec = item
+                value_type = self.accept(value_expr)
                 if format_spec is not None:
                     self.accept(format_spec)
+                self.strfrm_checker.check_template_str_interpolation(
+                    value_expr, value_type, conversion, format_spec
+                )
         sym = lookup_fully_qualified("string.templatelib.Template", self.chk.modules)
         if sym is not None and isinstance(sym.node, TypeInfo):
             return Instance(sym.node, [])

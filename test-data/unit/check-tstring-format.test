@@ -1,0 +1,220 @@
+[case testTStringFormatValidIntSpec]
+# flags: --python-version 3.14
+x: int
+reveal_type(t"{x:d}")  # N: Revealed type is "string.templatelib.Template"
+t"{x:b}"
+t"{x:o}"
+t"{x:x}"
+t"{x:X}"
+t"{x:n}"
+t"{x:.4f}"
+t"{x:e}"
+t"{x:%}"
+[builtins fixtures/f_string.pyi]
+[typing fixtures/typing-medium.pyi]
+
+[case testTStringFormatStrIncompatibleWithIntSpec]
+# flags: --python-version 3.14
+x: str
+t"{x:d}"  # E: Incompatible types in string interpolation (expression has type "str", placeholder has type "int")
+t"{x:b}"  # E: Incompatible types in string interpolation (expression has type "str", placeholder has type "int")
+t"{x:o}"  # E: Incompatible types in string interpolation (expression has type "str", placeholder has type "int")
+t"{x:x}"  # E: Incompatible types in string interpolation (expression has type "str", placeholder has type "int")
+[builtins fixtures/f_string.pyi]
+[typing fixtures/typing-medium.pyi]
+
+[case testTStringFormatStrIncompatibleWithFloatSpec]
+# flags: --python-version 3.14
+x: str
+t"{x:f}"  # E: Incompatible types in string interpolation (expression has type "str", placeholder has type "int | float")
+t"{x:e}"  # E: Incompatible types in string interpolation (expression has type "str", placeholder has type "int | float")
+t"{x:g}"  # E: Incompatible types in string interpolation (expression has type "str", placeholder has type "int | float")
+[builtins fixtures/f_string.pyi]
+[typing fixtures/typing-medium.pyi]
+
+[case testTStringFormatFloatIncompatibleWithIntSpec]
+# flags: --python-version 3.14
+x: float
+t"{x:d}"  # E: Incompatible types in string interpolation (expression has type "float", placeholder has type "int")
+t"{x:b}"  # E: Incompatible types in string interpolation (expression has type "float", placeholder has type "int")
+t"{x:x}"  # E: Incompatible types in string interpolation (expression has type "float", placeholder has type "int")
+[builtins fixtures/f_string.pyi]
+[typing fixtures/typing-medium.pyi]
+
+[case testTStringFormatConversionMakesValueStr]
+# flags: --python-version 3.14
+x: int
+t"{x!s}"
+t"{x!r}"
+t"{x!a}"
+t"{x!s:>10}"
+t"{x!r:>10}"
+t"{x!a:>10}"
+t"{x!s:^5}"
+[builtins fixtures/f_string.pyi]
+[typing fixtures/typing-medium.pyi]
+
+[case testTStringFormatStrAcceptsAnyValue]
+# flags: --python-version 3.14
+x: int
+y: float
+t"{x:s}"
+t"{y:s}"
+t"{x}"
+t"{y}"
+[builtins fixtures/f_string.pyi]
+[typing fixtures/typing-medium.pyi]
+
+[case testTStringFormatNestedSpecAllInt]
+# flags: --python-version 3.14
+value: float
+width: int
+precision: int
+t"result: {value:{width}.{precision}}"
+t"{value:{width}}"
+t"{value:.{precision}f}"
+[builtins fixtures/f_string.pyi]
+[typing fixtures/typing-medium.pyi]
+
+[case testTStringFormatNestedSpecNonIntWidth]
+# flags: --python-version 3.14
+value: float
+width: str
+precision: int
+t"{value:{width}.{precision}}"  # E: Incompatible types in string interpolation (expression has type "str", placeholder has type "int")
+[builtins fixtures/f_string.pyi]
+[typing fixtures/typing-medium.pyi]
+
+[case testTStringFormatNestedSpecNonIntPrecision]
+# flags: --python-version 3.14
+value: float
+width: int
+precision: str
+t"{value:{width}.{precision}}"  # E: Incompatible types in string interpolation (expression has type "str", placeholder has type "int")
+[builtins fixtures/f_string.pyi]
+[typing fixtures/typing-medium.pyi]
+
+[case testTStringFormatMalformedSpec]
+# flags: --python-version 3.14
+x: int
+t"{x:.}"      # E: Unsupported format character "."
+t"{x:.5d.}"   # E: Unrecognized format specification ".5d."
+t"{x:abc!def}"  # E: Unrecognized format specification "abc!def"
+[builtins fixtures/f_string.pyi]
+[typing fixtures/typing-medium.pyi]
+
+[case testTStringFormatUnsupportedFormatChar]
+# flags: --python-version 3.14
+x: str
+t"{x:z}"  # E: Unsupported format character "z"
+t"{x:Z}"  # E: Unsupported format character "Z"
+[builtins fixtures/f_string.pyi]
+[typing fixtures/typing-medium.pyi]
+
+[case testTStringFormatCustomFormatAcceptsAnySpec]
+# flags: --python-version 3.14
+class Custom:
+    def __format__(self, spec: str) -> str:
+        return ""
+
+c: Custom
+t"{c:my-custom-spec}"
+t"{c:any-thing-here}"
+t"{c:d}"
+t"{c:.42f}"
+[builtins fixtures/f_string.pyi]
+[typing fixtures/typing-medium.pyi]
+
+[case testTStringFormatNoCustomFormatRejectsCustomSpec]
+# flags: --python-version 3.14
+class Plain:
+    pass
+
+p: Plain
+t"{p:my-custom-spec}"  # E: Unrecognized format specification "my-custom-spec"
+[builtins fixtures/f_string.pyi]
+[typing fixtures/typing-medium.pyi]
+
+[case testTStringFormatMixedValidAndInvalid]
+# flags: --python-version 3.14
+x: int
+y: str
+z: float
+t"valid: {x:d}, invalid: {y:d}"  # E: Incompatible types in string interpolation (expression has type "str", placeholder has type "int")
+t"{x:d} and {z:d}"  # E: Incompatible types in string interpolation (expression has type "float", placeholder has type "int")
+t"{x:d} and {x:d}"
+[builtins fixtures/f_string.pyi]
+[typing fixtures/typing-medium.pyi]
+
+[case testTStringFormatRevealTypeUnchanged]
+# flags: --python-version 3.14
+x: int
+y: str
+reveal_type(t"plain")  # N: Revealed type is "string.templatelib.Template"
+reveal_type(t"{x}")  # N: Revealed type is "string.templatelib.Template"
+reveal_type(t"{x:d}")  # N: Revealed type is "string.templatelib.Template"
+reveal_type(t"{x!r}")  # N: Revealed type is "string.templatelib.Template"
+reveal_type(t"{x!s:>10}")  # N: Revealed type is "string.templatelib.Template"
+reveal_type(t"{y:s}")  # N: Revealed type is "string.templatelib.Template"
+[builtins fixtures/f_string.pyi]
+[typing fixtures/typing-medium.pyi]
+
+[case testTStringFormatConversionOnlyWithoutSpec]
+# flags: --python-version 3.14
+x: int
+y: float
+class C:
+    pass
+c: C
+t"{x!r}"
+t"{y!r}"
+t"{c!r}"
+t"{x!s}"
+t"{x!a}"
+[builtins fixtures/f_string.pyi]
+[typing fixtures/typing-medium.pyi]
+
+[case testTStringFormatIntEnumAcceptsIntSpec]
+# flags: --python-version 3.14
+from enum import IntEnum
+class Color(IntEnum):
+    RED = 1
+    GREEN = 2
+
+c: Color
+t"{c:d}"
+t"{c:b}"
+t"{c:x}"
+[builtins fixtures/f_string.pyi]
+[typing fixtures/typing-medium.pyi]
+
+[case testTStringFormatCharSpec]
+# flags: --python-version 3.14
+x: int
+y: str
+z: float
+t"{x:c}"
+t"{y:c}"
+t"{z:c}"  # E: Incompatible types in string interpolation (expression has type "float", placeholder has type "int | str")
+[builtins fixtures/f_string.pyi]
+[typing fixtures/typing-medium.pyi]
+
+[case testTStringFormatNestedSpecAnyAllowed]
+# flags: --python-version 3.14
+from typing import Any
+value: float
+width: Any
+t"{value:{width}}"
+[builtins fixtures/f_string.pyi]
+[typing fixtures/typing-medium.pyi]
+
+[case testTStringFormatEmptySpec]
+# flags: --python-version 3.14
+x: int
+y: str
+z: float
+t"{x:}"
+t"{y:}"
+t"{z:}"
+[builtins fixtures/f_string.pyi]
+[typing fixtures/typing-medium.pyi]

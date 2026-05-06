@@ -52,6 +52,7 @@ if sys.version_info < (3, 13):
     typecheck_files.remove("check-python313.test")
 if sys.version_info < (3, 14):
     typecheck_files.remove("check-python314.test")
+    typecheck_files.remove("check-tstring-format.test")
 
 
 class TypeCheckSuite(DataSuite):
