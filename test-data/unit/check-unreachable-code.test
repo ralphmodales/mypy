@@ -1434,7 +1434,8 @@ def test_untyped_fn(obj):
     obj.reload()
 
     assert obj.prop is False
-    reveal_type(obj.prop)
+    reveal_type(obj.prop)  # N: Revealed type is "Any" \
+                           # N: 'reveal_type' always outputs 'Any' in unchecked functions
 
 def test_typed_fn(obj) -> None:
     assert obj.prop is True
@@ -1443,7 +1444,7 @@ def test_typed_fn(obj) -> None:
     obj.reload()
 
     assert obj.prop is False
-    reveal_type(obj.prop)  # E: Statement is unreachable
+    reveal_type(obj.prop)  # N: Revealed type is "Literal[False]"
 
 [case testUnreachableCheckedUntypedFunction]
 # flags: --warn-unreachable --check-untyped-defs
@@ -1455,7 +1456,7 @@ def test_untyped_fn(obj):
     obj.reload()
 
     assert obj.prop is False
-    reveal_type(obj.prop)  # E: Statement is unreachable
+    reveal_type(obj.prop)  # N: Revealed type is "Literal[False]"
 
 [case testConditionalTypeVarException]
 # every part of this test case was necessary to trigger the crash

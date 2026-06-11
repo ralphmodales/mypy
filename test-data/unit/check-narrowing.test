@@ -707,13 +707,9 @@ class FlipFlopStr:
 
 
 def test1(switch: FlipFlopStr) -> None:
-    # Naively, we might assume the 'assert' here would narrow the type to
-    # Literal["state-1"]. However, doing this ends up breaking a fair number of real-world
-    # code (usually test cases) that looks similar to this function: e.g. checks
-    # to make sure a field was mutated to some particular value.
-    #
-    # And since mypy can't really reason about state mutation, we take a conservative
-    # approach and avoid narrowing anything here.
+    # mypy invalidates narrowings of mutable attributes after a method call on
+    # the receiver, since the call could have mutated them. The post-mutate()
+    # assertion therefore narrows independently of the earlier one.
 
     assert switch.state == "state-1"
     reveal_type(switch.state)          # N: Revealed type is "builtins.str"
@@ -724,28 +720,28 @@ def test1(switch: FlipFlopStr) -> None:
     reveal_type(switch.state)          # N: Revealed type is "builtins.str"
 
 def test2(switch: FlipFlopEnum) -> None:
-    # This is the same thing as 'test1', except we use enums, which we allow to be narrowed
-    # to literals.
+    # Same as test1, but with an enum value. The narrowing from the first
+    # assertion is dropped after switch.mutate(), so the second assertion is
+    # not flagged as a non-overlapping comparison.
 
     assert switch.state == State.A
     reveal_type(switch.state)          # N: Revealed type is "Literal[__main__.State.A]"
 
     switch.mutate()
 
-    assert switch.state == State.B     # E: Non-overlapping equality check (left operand type: "Literal[State.A]", right operand type: "Literal[State.B]")
-    reveal_type(switch.state)          # E: Statement is unreachable
+    assert switch.state == State.B
+    reveal_type(switch.state)          # N: Revealed type is "Literal[__main__.State.B]"
 
 def test3(switch: FlipFlopEnum) -> None:
-    # Same thing, but using 'is' comparisons. Previously mypy's behaviour differed
-    # here, narrowing when using 'is', but not when using '=='.
+    # Same as test2, but using 'is' comparisons.
 
     assert switch.state is State.A
     reveal_type(switch.state)          # N: Revealed type is "Literal[__main__.State.A]"
 
     switch.mutate()
 
-    assert switch.state is State.B     # E: Non-overlapping identity check (left operand type: "Literal[State.A]", right operand type: "Literal[State.B]")
-    reveal_type(switch.state)          # E: Statement is unreachable
+    assert switch.state is State.B
+    reveal_type(switch.state)          # N: Revealed type is "Literal[__main__.State.B]"
 [builtins fixtures/primitives.pyi]
 
 [case testNarrowingEqualityRequiresExplicitStrLiteral]

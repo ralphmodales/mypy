@@ -553,6 +553,44 @@ class ConditionalTypeBinder:
         for dep in self.dependencies.get(key, set()):
             self._cleanse_key(dep)
 
+    def invalidate_member_narrowings(
+        self,
+        expr: BindableExpression,
+        *,
+        preserve_final_attrs: frozenset[str] = frozenset(),
+    ) -> None:
+        """Invalidate narrowings of attribute (and item) accesses on ``expr``.
+
+        Used after a method call on ``expr`` to drop assumptions about the
+        narrowed types of any of its attributes, since the call may have
+        mutated them. Narrowing of ``expr`` itself is preserved.
+
+        Direct attribute accesses whose name is in ``preserve_final_attrs``
+        are kept, since those attributes are declared ``Final`` on the
+        receiver and cannot be reassigned. Nested accesses through such
+        attributes are still invalidated, because Final only protects the
+        immediate attribute, not its own attributes.
+        """
+        key = literal_hash(expr)
+        if key is None:
+            return
+        deps = self.dependencies.get(key)
+        if not deps:
+            return
+        self.version += 1
+        for dep in deps:
+            if (
+                preserve_final_attrs
+                and isinstance(dep, tuple)
+                and len(dep) == 3
+                and dep[0] == "Member"
+                and dep[1] == key
+                and dep[2] in preserve_final_attrs
+            ):
+                continue
+            self._cleanse_key(dep)
+
+
     def allow_jump(self, index: int) -> None:
         # self.frames and self.options_on_return have different lengths
         # so make sure the index is positive

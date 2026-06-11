@@ -110,6 +110,7 @@ from mypy.nodes import (
     YieldExpr,
     YieldFromExpr,
     get_member_expr_fullname,
+    is_final_node,
 )
 from mypy.options import PRECISE_TUPLE_TYPES
 from mypy.plugin import (
@@ -155,6 +156,7 @@ from mypy.typeops import (
     function_type,
     get_all_type_vars,
     get_type_vars,
+    is_immutable_method_receiver,
     is_literal_type_like,
     make_simplified_union,
     true_only,
@@ -641,6 +643,7 @@ class ExpressionChecker(ExpressionVisitor[Type], ExpressionCheckerSharedApi):
         ret_type = self.check_call_expr_with_callee_type(
             callee_type, e, fullname, object_type, member
         )
+        self.invalidate_member_narrowings_after_method_call(e)
         if isinstance(e.callee, RefExpr) and len(e.args) == 2:
             if e.callee.fullname in ("builtins.isinstance", "builtins.issubclass"):
                 self.check_runtime_protocol_test(e)
@@ -687,6 +690,95 @@ class ExpressionChecker(ExpressionVisitor[Type], ExpressionCheckerSharedApi):
                 format_value = base_typ.value
         if format_value is not None:
             self.strfrm_checker.check_str_format_call(e, format_value)
+
+    def invalidate_member_narrowings_after_method_call(self, e: CallExpr) -> None:
+        """Drop narrowings of attribute accesses on the receiver of a method call.
+
+        A method call may mutate the receiver's attributes, so any narrowing
+        that the binder has recorded for those attributes is no longer
+        guaranteed to hold afterwards. We skip this for receivers whose type
+        is known to be immutable (built-in primitives, tuples, enums, etc.),
+        since their methods cannot mutate attribute state. We also keep
+        narrowings of any attribute declared ``Final`` on the receiver's type,
+        because Final attributes cannot be reassigned after initialization.
+        When the called member resolves to a static method on the receiver
+        type, narrowings are kept since static methods cannot reach the
+        instance state at all.
+        """
+        callee = e.callee
+        if not isinstance(callee, MemberExpr):
+            return
+        receiver = callee.expr
+        if isinstance(receiver, AssignmentExpr):
+            receiver = receiver.value
+        if not isinstance(receiver, (NameExpr, MemberExpr, IndexExpr)):
+            return
+        if not self.chk.has_type(receiver):
+            return
+        receiver_type = self.chk.lookup_type(receiver)
+        if is_immutable_method_receiver(receiver_type):
+            return
+        if self._is_static_method_call(callee.name, receiver_type):
+            return
+        preserve = self._final_attr_names(receiver_type)
+        self.chk.binder.invalidate_member_narrowings(receiver, preserve_final_attrs=preserve)
+
+    def _is_static_method_call(self, name: str, receiver_type: Type) -> bool:
+        """Return True if the member ``name`` resolves to a static method.
+
+        Static methods receive neither ``self`` nor ``cls`` and therefore
+        cannot reassign attributes of the receiver they are called on.
+        """
+        proper = get_proper_type(receiver_type)
+        if isinstance(proper, TupleType):
+            proper = proper.partial_fallback
+        if isinstance(proper, LiteralType):
+            proper = proper.fallback
+        if isinstance(proper, TypeVarType):
+            proper = get_proper_type(proper.upper_bound)
+        if not isinstance(proper, Instance):
+            return False
+        for base in proper.type.mro:
+            sym = base.names.get(name)
+            if sym is None:
+                continue
+            node = sym.node
+            if isinstance(node, Decorator):
+                return node.var.is_staticmethod
+            if isinstance(node, Var):
+                return node.is_staticmethod
+            return False
+        return False
+
+    def _final_attr_names(self, typ: Type) -> frozenset[str]:
+        """Return the names of attributes declared ``Final`` on the receiver type.
+
+        Walks the MRO of instance types and treats unions as the union of
+        final names on each member. For type variables the upper bound is
+        used as the effective receiver type.
+        """
+        proper = get_proper_type(typ)
+        if isinstance(proper, UnionType):
+            result: set[str] = set()
+            for item in proper.items:
+                result.update(self._final_attr_names(item))
+            return frozenset(result)
+        if isinstance(proper, TypeVarType):
+            return self._final_attr_names(proper.upper_bound)
+        if isinstance(proper, TupleType):
+            return self._final_attr_names(proper.partial_fallback)
+        if isinstance(proper, LiteralType):
+            return self._final_attr_names(proper.fallback)
+        if not isinstance(proper, Instance):
+            return frozenset()
+        names: set[str] = set()
+        for base in proper.type.mro:
+            for name, sym in base.names.items():
+                if is_final_node(sym.node):
+                    names.add(name)
+        return frozenset(names)
+
+
 
     def method_fullname(self, object_type: Type, method_name: str) -> str | None:
         """Convert a method name to a fully qualified name, based on the type of the object that

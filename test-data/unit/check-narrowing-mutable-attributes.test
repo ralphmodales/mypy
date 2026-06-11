@@ -1,0 +1,391 @@
+[case testNarrowingMutableAttributeAfterMethodCall]
+# flags: --strict-equality --warn-unreachable --python-version 3.10
+from enum import Enum
+from dataclasses import dataclass
+
+class E(Enum):
+    A = 1
+    B = 2
+
+@dataclass
+class D:
+    e: E
+    def set_e(self, e: E) -> None:
+        self.e = e
+
+def func(d: D, e: E) -> None:
+    if d.e == E.A:
+        return
+    reveal_type(d.e)  # N: Revealed type is "Literal[__main__.E.B]"
+    d.set_e(e)
+    reveal_type(d.e)  # N: Revealed type is "__main__.E"
+    if d.e == E.A:
+        return
+    reveal_type(d.e)  # N: Revealed type is "Literal[__main__.E.B]"
+[builtins fixtures/primitives.pyi]
+
+[case testNarrowingMutableAttributeAfterMethodCallOptional]
+# flags: --strict-equality --warn-unreachable --python-version 3.10
+class C:
+    x: int | None
+    def reset(self) -> None: ...
+
+def func(c: C) -> None:
+    if c.x is None:
+        return
+    reveal_type(c.x)  # N: Revealed type is "builtins.int"
+    c.reset()
+    reveal_type(c.x)  # N: Revealed type is "builtins.int | None"
+[builtins fixtures/primitives.pyi]
+
+[case testNarrowingMutableAttributePreservedForImmutableReceiver]
+# flags: --strict-equality --warn-unreachable --python-version 3.10
+class C:
+    x: int | None
+    def reset(self) -> None: ...
+
+def func(c: C, s: str) -> None:
+    if c.x is None:
+        return
+    reveal_type(c.x)  # N: Revealed type is "builtins.int"
+    s.split(",")
+    reveal_type(c.x)  # N: Revealed type is "builtins.int"
+    t = (1, 2)
+    t.__contains__(1)
+    reveal_type(c.x)  # N: Revealed type is "builtins.int"
+    c.reset()
+    reveal_type(c.x)  # N: Revealed type is "builtins.int | None"
+[builtins fixtures/primitives.pyi]
+
+[case testNarrowingMutableAttributeAcrossNonReceiverCallAndMethodCall]
+# flags: --strict-equality --warn-unreachable --python-version 3.10
+class C:
+    x: int | None
+    def reset(self) -> None: ...
+
+def helper() -> None: ...
+
+def func(c: C) -> None:
+    if c.x is None:
+        return
+    reveal_type(c.x)  # N: Revealed type is "builtins.int"
+    helper()
+    reveal_type(c.x)  # N: Revealed type is "builtins.int"
+    c.reset()
+    reveal_type(c.x)  # N: Revealed type is "builtins.int | None"
+[builtins fixtures/primitives.pyi]
+
+[case testNarrowingMutableAttributeInvalidatedThroughNestedReceiver]
+# flags: --strict-equality --warn-unreachable --python-version 3.10
+class Inner:
+    v: int | None
+    def reset(self) -> None: ...
+
+class Outer:
+    inner: Inner
+
+def func(o: Outer) -> None:
+    if o.inner.v is None:
+        return
+    reveal_type(o.inner.v)  # N: Revealed type is "builtins.int"
+    o.inner.reset()
+    reveal_type(o.inner.v)  # N: Revealed type is "builtins.int | None"
+[builtins fixtures/primitives.pyi]
+
+[case testNarrowingMutableAttributeNotClearedForUnrelatedReceiver]
+# flags: --strict-equality --warn-unreachable --python-version 3.10
+class C:
+    x: int | None
+    def reset(self) -> None: ...
+
+def func(c1: C, c2: C) -> None:
+    if c1.x is None:
+        return
+    if c2.x is None:
+        return
+    reveal_type(c1.x)  # N: Revealed type is "builtins.int"
+    reveal_type(c2.x)  # N: Revealed type is "builtins.int"
+    c2.reset()
+    reveal_type(c1.x)  # N: Revealed type is "builtins.int"
+    reveal_type(c2.x)  # N: Revealed type is "builtins.int | None"
+[builtins fixtures/primitives.pyi]
+
+[case testNarrowingMutableAttributeInvalidatedFromSelfCall]
+# flags: --strict-equality --warn-unreachable --python-version 3.10
+class C:
+    x: int | None
+    def reset(self) -> None: ...
+    def use(self) -> None:
+        if self.x is None:
+            return
+        reveal_type(self.x)  # N: Revealed type is "builtins.int"
+        self.reset()
+        reveal_type(self.x)  # N: Revealed type is "builtins.int | None"
+[builtins fixtures/primitives.pyi]
+
+[case testNarrowingMutableReceiverItselfPreservedButAttributeInvalidated]
+# flags: --strict-equality --warn-unreachable --python-version 3.10
+class C:
+    x: int | None
+    def hello(self) -> None: ...
+
+def func(c: C | None) -> None:
+    if c is None:
+        return
+    if c.x is None:
+        return
+    reveal_type(c)    # N: Revealed type is "__main__.C"
+    reveal_type(c.x)  # N: Revealed type is "builtins.int"
+    c.hello()
+    reveal_type(c)    # N: Revealed type is "__main__.C"
+    reveal_type(c.x)  # N: Revealed type is "builtins.int | None"
+[builtins fixtures/primitives.pyi]
+
+[case testNarrowingMutableAttributeViaIndexReceiver]
+# flags: --strict-equality --warn-unreachable --python-version 3.10
+class C:
+    x: int | None
+    def reset(self) -> None: ...
+
+def func(items: list[C]) -> None:
+    if items[0].x is None:
+        return
+    reveal_type(items[0].x)  # N: Revealed type is "builtins.int"
+    items[0].reset()
+    reveal_type(items[0].x)  # N: Revealed type is "builtins.int | None"
+[builtins fixtures/primitives.pyi]
+
+[case testNarrowingMutableAttributeViaTypedDictUpdate]
+# flags: --strict-equality --warn-unreachable --python-version 3.10
+from typing import TypedDict
+
+class D(TypedDict):
+    x: int | None
+
+def func(d: D) -> None:
+    if d["x"] is None:
+        return
+    reveal_type(d["x"])  # N: Revealed type is "builtins.int"
+    d.update(d)
+    reveal_type(d["x"])  # N: Revealed type is "builtins.int | None"
+[builtins fixtures/dict.pyi]
+[typing fixtures/typing-typeddict.pyi]
+
+[case testNarrowingMutableAttributePreservedForEnumReceiverAndInvalidatedForMutable]
+# flags: --strict-equality --warn-unreachable --python-version 3.10
+from enum import Enum
+
+class Mode(Enum):
+    A = 1
+    B = 2
+
+class C:
+    x: int | None
+    def reset(self) -> None: ...
+
+def func(c: C, m: Mode) -> None:
+    if c.x is None:
+        return
+    reveal_type(c.x)  # N: Revealed type is "builtins.int"
+    m.__str__()
+    reveal_type(c.x)  # N: Revealed type is "builtins.int"
+    c.reset()
+    reveal_type(c.x)  # N: Revealed type is "builtins.int | None"
+[builtins fixtures/primitives.pyi]
+
+[case testNarrowingMutableAttributePreservedForFrozenDataclassAndInvalidatedForMutable]
+# flags: --strict-equality --warn-unreachable --python-version 3.10
+from dataclasses import dataclass
+
+@dataclass(frozen=True)
+class Frozen:
+    value: int
+    def describe(self) -> str: ...
+
+class C:
+    x: int | None
+    def reset(self) -> None: ...
+
+def func(c: C, f: Frozen) -> None:
+    if c.x is None:
+        return
+    reveal_type(c.x)  # N: Revealed type is "builtins.int"
+    f.describe()
+    reveal_type(c.x)  # N: Revealed type is "builtins.int"
+    c.reset()
+    reveal_type(c.x)  # N: Revealed type is "builtins.int | None"
+[builtins fixtures/dataclasses.pyi]
+
+[case testNarrowingMutableAttributePreservedForTypeVarBoundAndInvalidatedForMutable]
+# flags: --strict-equality --warn-unreachable --python-version 3.10
+from typing import TypeVar
+
+T = TypeVar("T", bound=str)
+
+class C:
+    x: int | None
+    def reset(self) -> None: ...
+
+def func(c: C, s: T) -> T:
+    if c.x is None:
+        return s
+    reveal_type(c.x)  # N: Revealed type is "builtins.int"
+    s.split(",")
+    reveal_type(c.x)  # N: Revealed type is "builtins.int"
+    c.reset()
+    reveal_type(c.x)  # N: Revealed type is "builtins.int | None"
+    return s
+[builtins fixtures/primitives.pyi]
+
+[case testNarrowingFinalAttributePreservedAcrossMethodCall]
+# flags: --strict-equality --warn-unreachable --python-version 3.10
+from typing import Final
+
+class C:
+    final_x: Final[int | None]
+    y: int | None
+    def __init__(self, x: int | None) -> None:
+        self.final_x = x
+        self.y = x
+    def mutate(self) -> None: ...
+
+def func(c: C) -> None:
+    if c.final_x is None:
+        return
+    if c.y is None:
+        return
+    reveal_type(c.final_x)  # N: Revealed type is "builtins.int"
+    reveal_type(c.y)        # N: Revealed type is "builtins.int"
+    c.mutate()
+    reveal_type(c.final_x)  # N: Revealed type is "builtins.int"
+    reveal_type(c.y)        # N: Revealed type is "builtins.int | None"
+[builtins fixtures/primitives.pyi]
+[typing fixtures/typing-medium.pyi]
+
+[case testNarrowingFinalAttributePreservedInheritedFromBase]
+# flags: --strict-equality --warn-unreachable --python-version 3.10
+from typing import Final
+
+class Base:
+    final_x: Final[int | None]
+    def __init__(self, x: int | None) -> None:
+        self.final_x = x
+
+class Derived(Base):
+    y: int | None
+    def __init__(self, x: int | None) -> None:
+        super().__init__(x)
+        self.y = x
+    def mutate(self) -> None: ...
+
+def func(d: Derived) -> None:
+    if d.final_x is None:
+        return
+    if d.y is None:
+        return
+    reveal_type(d.final_x)  # N: Revealed type is "builtins.int"
+    reveal_type(d.y)        # N: Revealed type is "builtins.int"
+    d.mutate()
+    reveal_type(d.final_x)  # N: Revealed type is "builtins.int"
+    reveal_type(d.y)        # N: Revealed type is "builtins.int | None"
+[builtins fixtures/primitives.pyi]
+[typing fixtures/typing-medium.pyi]
+
+[case testNarrowingNestedReceiverDoesNotClearParentSiblings]
+# flags: --strict-equality --warn-unreachable --python-version 3.10
+class Inner:
+    v: int | None
+    def reset(self) -> None: ...
+
+class Outer:
+    inner: Inner
+    flag: int | None
+
+def func(o: Outer) -> None:
+    if o.flag is None:
+        return
+    if o.inner.v is None:
+        return
+    reveal_type(o.flag)     # N: Revealed type is "builtins.int"
+    reveal_type(o.inner.v)  # N: Revealed type is "builtins.int"
+    o.inner.reset()
+    reveal_type(o.flag)     # N: Revealed type is "builtins.int"
+    reveal_type(o.inner.v)  # N: Revealed type is "builtins.int | None"
+[builtins fixtures/primitives.pyi]
+
+[case testNarrowingMutableAttributeInvalidatedThroughWalrusReceiver]
+# flags: --strict-equality --warn-unreachable --python-version 3.10
+class C:
+    x: int | None
+    def reset(self) -> None: ...
+
+def func(c: C) -> None:
+    if c.x is None:
+        return
+    reveal_type(c.x)  # N: Revealed type is "builtins.int"
+    (c).reset()
+    reveal_type(c.x)  # N: Revealed type is "builtins.int | None"
+    if c.x is None:
+        return
+    reveal_type(c.x)  # N: Revealed type is "builtins.int"
+    (alias := c).reset()
+    reveal_type(c.x)  # N: Revealed type is "builtins.int | None"
+[builtins fixtures/primitives.pyi]
+
+[case testNarrowingMutableAttributePreservedForStaticMethodCall]
+# flags: --strict-equality --warn-unreachable --python-version 3.10
+class C:
+    x: int | None
+    @staticmethod
+    def helper() -> int: ...
+    def mutate(self) -> None: ...
+
+def func(c: C) -> None:
+    if c.x is None:
+        return
+    reveal_type(c.x)  # N: Revealed type is "builtins.int"
+    c.helper()
+    reveal_type(c.x)  # N: Revealed type is "builtins.int"
+    c.mutate()
+    reveal_type(c.x)  # N: Revealed type is "builtins.int | None"
+[builtins fixtures/classmethod.pyi]
+
+[case testNarrowingMutableAttributeInvalidatedForMethodReturningSelf]
+# flags: --strict-equality --warn-unreachable --python-version 3.10
+from typing import TypeVar
+
+T = TypeVar("T", bound="Builder")
+
+class Builder:
+    x: int | None
+    def chain(self: T) -> T: ...
+
+def func(b: Builder) -> None:
+    if b.x is None:
+        return
+    reveal_type(b.x)  # N: Revealed type is "builtins.int"
+    result = b.chain()
+    reveal_type(b.x)  # N: Revealed type is "builtins.int | None"
+[builtins fixtures/primitives.pyi]
+
+[case testNarrowingMutableAttributePreservedAcrossChainedCallSegments]
+# flags: --strict-equality --warn-unreachable --python-version 3.10
+class Inner:
+    v: int | None
+    def go(self) -> "Inner": ...
+
+class Outer:
+    inner: Inner
+    other: int | None
+
+def func(o: Outer) -> None:
+    if o.other is None:
+        return
+    if o.inner.v is None:
+        return
+    reveal_type(o.other)    # N: Revealed type is "builtins.int"
+    reveal_type(o.inner.v)  # N: Revealed type is "builtins.int"
+    o.inner.go().go()
+    reveal_type(o.other)    # N: Revealed type is "builtins.int"
+    reveal_type(o.inner.v)  # N: Revealed type is "builtins.int | None"
+[builtins fixtures/primitives.pyi]

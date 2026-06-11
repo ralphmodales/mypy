@@ -1033,6 +1033,113 @@ def is_singleton_equality_type(typ: ProperType) -> bool:
     return isinstance(typ, LiteralType) or is_singleton_identity_type(typ)
 
 
+IMMUTABLE_METHOD_RECEIVER_TYPES: frozenset[str] = frozenset(
+    {
+        "builtins.bool",
+        "builtins.bytes",
+        "builtins.complex",
+        "builtins.ellipsis",
+        "builtins.float",
+        "builtins.frozenset",
+        "builtins.function",
+        "builtins.int",
+        "builtins.module",
+        "builtins.range",
+        "builtins.slice",
+        "builtins.str",
+        "builtins.tuple",
+        "types.MappingProxyType",
+        "types.NotImplementedType",
+    }
+)
+
+
+IMMUTABLE_STDLIB_METHOD_RECEIVER_TYPES: frozenset[str] = frozenset(
+    {
+        "datetime.date",
+        "datetime.datetime",
+        "datetime.time",
+        "datetime.timedelta",
+        "datetime.timezone",
+        "datetime.tzinfo",
+        "decimal.Decimal",
+        "fractions.Fraction",
+        "ipaddress.IPv4Address",
+        "ipaddress.IPv4Interface",
+        "ipaddress.IPv4Network",
+        "ipaddress.IPv6Address",
+        "ipaddress.IPv6Interface",
+        "ipaddress.IPv6Network",
+        "pathlib.Path",
+        "pathlib.PosixPath",
+        "pathlib.PurePath",
+        "pathlib.PurePosixPath",
+        "pathlib.PureWindowsPath",
+        "pathlib.WindowsPath",
+        "re.Pattern",
+        "re.Match",
+        "uuid.UUID",
+    }
+)
+
+
+def _has_frozen_dataclass_metadata(info: TypeInfo) -> bool:
+    for base in info.mro:
+        meta = base.metadata.get("dataclass")
+        if meta is None:
+            continue
+        if meta.get("frozen"):
+            return True
+    return False
+
+
+def _has_namedtuple_metadata(info: TypeInfo) -> bool:
+    for base in info.mro:
+        if "namedtuple" in base.metadata:
+            return True
+    return False
+
+
+def _is_immutable_instance(info: TypeInfo) -> bool:
+    if info.fullname in IMMUTABLE_METHOD_RECEIVER_TYPES:
+        return True
+    if info.fullname in IMMUTABLE_STDLIB_METHOD_RECEIVER_TYPES:
+        return True
+    if info.is_enum:
+        return True
+    if info.fullname in ELLIPSIS_TYPE_NAMES:
+        return True
+    if info.fullname in NOT_IMPLEMENTED_TYPE_NAMES:
+        return True
+    if _has_frozen_dataclass_metadata(info):
+        return True
+    if _has_namedtuple_metadata(info):
+        return True
+    return False
+
+
+def is_immutable_method_receiver(typ: Type) -> bool:
+    """Return True when method calls on a value of this type cannot mutate it.
+
+    Used by the binder to decide whether to invalidate narrowings of attribute
+    accesses on a receiver after a method call. For receivers of types that
+    cannot be mutated, narrowings of their attribute accesses can be preserved
+    safely across the call.
+    """
+    proper = get_proper_type(typ)
+    if isinstance(proper, (NoneType, TupleType, UninhabitedType)):
+        return True
+    if isinstance(proper, LiteralType):
+        return is_immutable_method_receiver(proper.fallback)
+    if isinstance(proper, UnionType):
+        return all(is_immutable_method_receiver(item) for item in proper.items)
+    if isinstance(proper, TypeVarType):
+        return is_immutable_method_receiver(proper.upper_bound)
+    if isinstance(proper, Instance):
+        return _is_immutable_instance(proper.type)
+    return False
+
+
 def try_expanding_sum_type_to_union(typ: Type, target_fullname: str | None) -> Type:
     """Attempts to recursively expand any enum Instances with the given target_fullname
     into a Union of all of its component LiteralTypes.
