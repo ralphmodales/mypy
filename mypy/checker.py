@@ -6643,32 +6643,54 @@ class TypeChecker(NodeVisitor[None], TypeCheckerSharedApi):
                 if_map = {}
                 else_map = {}
 
-                if left_index in narrowable_operand_index_to_hash:
-                    collection_item_type = get_proper_type(builtin_item_type(iterable_type))
-                    if collection_item_type is not None:
-                        if_map, else_map = self.narrow_type_by_identity_equality(
-                            "==",
-                            operands=[operands[left_index], operands[right_index]],
-                            operand_types=[item_type, collection_item_type],
-                            expr_indices=[0, 1],
-                            narrowable_indices={0},
-                        )
+                contains_type_guard, contains_type_is = self._contains_type_guard_or_is(
+                    iterable_type
+                )
+                contains_narrowed = False
+                if (
+                    left_index in narrowable_operand_index_to_hash
+                    and literal(operands[left_index]) == LITERAL_TYPE
+                    and (contains_type_guard is not None or contains_type_is is not None)
+                ):
+                    applied = self._apply_type_guard_or_is_to_expr(
+                        operands[left_index], contains_type_guard, contains_type_is
+                    )
+                    if applied is not None:
+                        guard_if_map, guard_else_map = applied
+                        if_map.update(guard_if_map)
+                        if guard_else_map is not None:
+                            else_map.update(guard_else_map)
+                        contains_narrowed = True
 
-                        # TODO: This remove_optional code should no longer be needed. The only
-                        # thing it does is paper over a pre-existing deficiency in equality
-                        # narrowing w.r.t to enums.
-                        # We only try and narrow away 'None' for now
-                        if (
-                            not is_unreachable_map(if_map)
-                            and is_overlapping_none(item_type)
-                            and not is_overlapping_none(collection_item_type)
-                            and not (
-                                isinstance(collection_item_type, Instance)
-                                and collection_item_type.type.fullname == "builtins.object"
+                if left_index in narrowable_operand_index_to_hash:
+                    if contains_narrowed:
+                        pass
+                    else:
+                        collection_item_type = get_proper_type(builtin_item_type(iterable_type))
+                        if collection_item_type is not None:
+                            if_map, else_map = self.narrow_type_by_identity_equality(
+                                "==",
+                                operands=[operands[left_index], operands[right_index]],
+                                operand_types=[item_type, collection_item_type],
+                                expr_indices=[0, 1],
+                                narrowable_indices={0},
                             )
-                            and is_overlapping_erased_types(item_type, collection_item_type)
-                        ):
-                            if_map[operands[left_index]] = remove_optional(item_type)
+
+                            # TODO: This remove_optional code should no longer be needed. The only
+                            # thing it does is paper over a pre-existing deficiency in equality
+                            # narrowing w.r.t to enums.
+                            # We only try and narrow away 'None' for now
+                            if (
+                                not is_unreachable_map(if_map)
+                                and is_overlapping_none(item_type)
+                                and not is_overlapping_none(collection_item_type)
+                                and not (
+                                    isinstance(collection_item_type, Instance)
+                                    and collection_item_type.type.fullname == "builtins.object"
+                                )
+                                and is_overlapping_erased_types(item_type, collection_item_type)
+                            ):
+                                if_map[operands[left_index]] = remove_optional(item_type)
 
                 if right_index in narrowable_operand_index_to_hash:
                     if_type, else_type = self.conditional_types_for_iterable(
@@ -6696,6 +6718,96 @@ class TypeChecker(NodeVisitor[None], TypeCheckerSharedApi):
             # Use meet for `and` maps to get correct results for chained checks
             # like `if 1 < len(x) < 4: ...`
             return reduce_conditional_maps(self.find_tuple_len_narrowing(node), use_meet=True)
+
+    def _dunder_type_guard_or_is(
+        self, operand_type: Type, dunder: str
+    ) -> tuple[Type | None, Type | None]:
+        t = get_proper_type(operand_type)
+        if isinstance(t, Instance):
+            method = find_member(dunder, t, t, is_operator=True)
+            if method is None:
+                return None, None
+            method = get_proper_type(method)
+            if isinstance(method, CallableType):
+                return method.type_guard, method.type_is
+            if isinstance(method, Overloaded):
+                if not method.items:
+                    return None, None
+                first = method.items[0]
+                guard_candidate = first.type_guard
+                is_candidate = first.type_is
+                for other in method.items[1:]:
+                    if guard_candidate is not None:
+                        if other.type_guard is None or not is_equivalent(
+                            guard_candidate, other.type_guard
+                        ):
+                            guard_candidate = None
+                    if is_candidate is not None:
+                        if other.type_is is None or not is_equivalent(
+                            is_candidate, other.type_is
+                        ):
+                            is_candidate = None
+                    if guard_candidate is None and is_candidate is None:
+                        break
+                return guard_candidate, is_candidate
+            return None, None
+        if isinstance(t, UnionType):
+            guards: list[Type] = []
+            ises: list[Type] = []
+            for item in t.items:
+                g, i_ = self._dunder_type_guard_or_is(item, dunder)
+                if g is None and i_ is None:
+                    return None, None
+                if g is not None:
+                    guards.append(g)
+                if i_ is not None:
+                    ises.append(i_)
+            if guards and not ises:
+                first_g = guards[0]
+                for g in guards[1:]:
+                    if not is_equivalent(first_g, g):
+                        return None, None
+                return first_g, None
+            if ises and not guards:
+                first_i = ises[0]
+                for i_ in ises[1:]:
+                    if not is_equivalent(first_i, i_):
+                        return None, None
+                return None, first_i
+            return None, None
+        if isinstance(t, TupleType):
+            return self._dunder_type_guard_or_is(tuple_fallback(t), dunder)
+        return None, None
+
+    def _eq_type_guard_or_is(
+        self, operand_type: Type
+    ) -> tuple[Type | None, Type | None]:
+        return self._dunder_type_guard_or_is(operand_type, "__eq__")
+
+    def _contains_type_guard_or_is(
+        self, operand_type: Type
+    ) -> tuple[Type | None, Type | None]:
+        return self._dunder_type_guard_or_is(operand_type, "__contains__")
+
+    def _apply_type_guard_or_is_to_expr(
+        self,
+        target_expr: Expression,
+        type_guard: Type | None,
+        type_is: Type | None,
+    ) -> tuple[TypeMap, TypeMap] | None:
+        if type_guard is not None:
+            return {target_expr: TypeGuardedType(type_guard)}, None
+        if type_is is not None:
+            return conditional_types_to_typemaps(
+                target_expr,
+                *self.conditional_types_with_intersection(
+                    self.lookup_type(target_expr),
+                    [TypeRange(type_is, is_upper_bound=False)],
+                    target_expr,
+                    consider_runtime_isinstance=False,
+                ),
+            )
+        return None
 
     def narrow_type_by_identity_equality(
         self,
@@ -6826,10 +6938,44 @@ class TypeChecker(NodeVisitor[None], TypeCheckerSharedApi):
                     if self.options.warn_unreachable or not is_unreachable_map(if_map):
                         all_if_maps.append(if_map)
 
+        custom_eq_typeguard_narrowed: set[int] = set()
+        for pos_i, i in enumerate(expr_indices):
+            if i not in custom_eq_indices:
+                continue
+            i_type_guard, i_type_is = self._eq_type_guard_or_is(operand_types[i])
+            if i_type_guard is None and i_type_is is None:
+                continue
+            adjacent_indices: list[int] = []
+            if pos_i - 1 >= 0:
+                adjacent_indices.append(expr_indices[pos_i - 1])
+            if pos_i + 1 < len(expr_indices):
+                adjacent_indices.append(expr_indices[pos_i + 1])
+            contributed = False
+            for j in adjacent_indices:
+                if j not in narrowable_indices:
+                    continue
+                target_expr = operands[j]
+                if literal(target_expr) != LITERAL_TYPE:
+                    continue
+                applied = self._apply_type_guard_or_is_to_expr(
+                    target_expr, i_type_guard, i_type_is
+                )
+                if applied is None:
+                    continue
+                guard_if_map, guard_else_map = applied
+                all_if_maps.append(guard_if_map)
+                if guard_else_map is not None:
+                    all_else_maps.append(guard_else_map)
+                contributed = True
+            if contributed:
+                custom_eq_typeguard_narrowed.add(i)
+
         # Handle narrowing for operands with custom __eq__ methods specially
         # In most cases, we won't be able to do any narrowing
         for i in custom_eq_indices:
             if i not in narrowable_indices:
+                continue
+            if i in custom_eq_typeguard_narrowed:
                 continue
             union_expr_type = get_proper_type(operand_types[i])
             if not isinstance(union_expr_type, UnionType):
