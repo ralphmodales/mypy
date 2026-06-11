@@ -37,6 +37,7 @@ from mypy.nodes import (
 from mypy.options import Options
 from mypy.semanal_shared import (
     SemanticAnalyzerInterface,
+    flatten_class_body_if_statements,
     has_placeholder,
     require_bool_literal_argument,
 )
@@ -315,6 +316,15 @@ class TypedDictAnalyzer:
                 continue
             for_function = ' for "__init_subclass__" of "TypedDict"'
             self.msg.unexpected_keyword_argument_for_function(for_function, key, defn)
+
+        def _on_unresolvable_conditional(msg: str, ctx: Context, code_str: str) -> None:
+            self.fail(msg, ctx, code=codes.CONDITIONAL_CLASS_BODY)
+
+        flattened_body, conditional_removed = flatten_class_body_if_statements(
+            defn.defs.body, _on_unresolvable_conditional, "TypedDict"
+        )
+        defn.defs.body = flattened_body
+        defn.removed_statements.extend(conditional_removed)
 
         for stmt in defn.defs.body:
             if not isinstance(stmt, AssignmentStmt):

@@ -10,7 +10,7 @@ from collections.abc import Container, Iterator, Mapping
 from contextlib import contextmanager
 from typing import Final, cast
 
-from mypy.errorcodes import ARG_TYPE, ErrorCode
+from mypy.errorcodes import ARG_TYPE, CONDITIONAL_CLASS_BODY, ErrorCode
 from mypy.exprtotype import TypeTranslationError, expr_to_unanalyzed_type
 from mypy.messages import MessageBuilder
 from mypy.nodes import (
@@ -52,6 +52,7 @@ from mypy.semanal_shared import (
     PRIORITY_FALLBACKS,
     SemanticAnalyzerInterface,
     calculate_tuple_fallback,
+    flatten_class_body_if_statements,
     has_placeholder,
     set_callable_name,
 )
@@ -157,6 +158,17 @@ class NamedTupleAnalyzer:
         types: list[Type] = []
         default_items: dict[str, Expression] = {}
         statements: list[Statement] = []
+        seen_field_names: set[str] = set()
+
+        def _on_unresolvable_conditional(msg: str, ctx: Context, code_str: str) -> None:
+            self.fail(msg, ctx, code=CONDITIONAL_CLASS_BODY)
+
+        flattened_body, conditional_removed = flatten_class_body_if_statements(
+            defn.defs.body, _on_unresolvable_conditional, "NamedTuple"
+        )
+        defn.defs.body = flattened_body
+        defn.removed_statements.extend(conditional_removed)
+
         for stmt in defn.defs.body:
             statements.append(stmt)
             if not isinstance(stmt, AssignmentStmt):
@@ -182,6 +194,12 @@ class NamedTupleAnalyzer:
             else:
                 # Append name and type in this case...
                 name = stmt.lvalues[0].name
+                if name in seen_field_names:
+                    self.fail(f'Duplicate NamedTuple field "{name}"', stmt)
+                    statements.pop()
+                    defn.removed_statements.append(stmt)
+                    continue
+                seen_field_names.add(name)
                 items.append(name)
                 if stmt.type is None:
                     types.append(AnyType(TypeOfAny.unannotated))

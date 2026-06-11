@@ -329,5 +329,11 @@ DEPRECATED: Final = ErrorCode(
     default_enabled=False,
 )
 
+CONDITIONAL_CLASS_BODY: Final = ErrorCode(
+    "conditional-class-body",
+    "Class body conditional could not be statically resolved",
+    "General",
+)
+
 # This copy will not include any error codes defined later in the plugins.
 mypy_error_codes = error_codes.copy()
