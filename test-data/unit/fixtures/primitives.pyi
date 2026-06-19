@@ -67,6 +67,7 @@ class set(Iterable[T]):
     def __iter__(self) -> Iterator[T]: pass
     def __contains__(self, o: object, /) -> bool: pass
 class frozenset(Iterable[T]):
+    def __init__(self, iterable: Iterable[T] = ...) -> None: pass
     def __iter__(self) -> Iterator[T]: pass
 class function: pass
 class ellipsis: pass

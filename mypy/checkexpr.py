@@ -2399,7 +2399,35 @@ class ExpressionChecker(ExpressionVisitor[Type], ExpressionCheckerSharedApi):
             if not skip_param_spec and arg.accept(ArgInferSecondPassQuery()):
                 for j in formal_to_actual[i]:
                     res[j] = 2
+        self._mark_collection_literals_for_second_pass(callee, args, formal_to_actual, res)
         return res
+
+    def _mark_collection_literals_for_second_pass(
+        self,
+        callee: CallableType,
+        args: list[Expression],
+        formal_to_actual: list[list[int]],
+        res: list[int],
+    ) -> None:
+        if callee.special_sig is not None:
+            return
+        if callee.name is not None and callee.name.startswith("<"):
+            return
+        info = _CollectionLiteralInfo(callee)
+        if not info.shared_typevar_ids:
+            return
+        for i in info.candidate_formals():
+            if not _formal_has_typevar_shared_with_others(i, info):
+                continue
+            for j in formal_to_actual[i]:
+                if j >= len(args):
+                    continue
+                actual = args[j]
+                if not _is_collection_literal_expression(actual):
+                    continue
+                if not _collection_literal_can_use_lkv(actual):
+                    continue
+                res[j] = 2
 
     def apply_inferred_arguments(
         self, callee_type: CallableType, inferred_args: Sequence[Type | None], context: Context
@@ -4862,6 +4890,7 @@ class ExpressionChecker(ExpressionVisitor[Type], ExpressionCheckerSharedApi):
             options.warn_redundant_casts
             and not is_same_type(target_type, AnyType(TypeOfAny.special_form))
             and is_same_type(source_type, target_type)
+            and not _cast_widens_lkv_to_literal_union(source_type, target_type)
         ):
             self.msg.redundant_cast(target_type, expr)
         if options.disallow_any_unimported and has_any_from_unimported_type(target_type):
@@ -6740,6 +6769,256 @@ class ArgInferSecondPassQuery(types.BoolTypeQuery):
     def visit_callable_type(self, t: CallableType) -> bool:
         # TODO: we need to check only for type variables of original callable.
         return self.query_types(t.arg_types) or has_type_vars(t)
+
+
+def _cast_widens_lkv_to_literal_union(source: Type, target: Type) -> bool:
+    target_p = get_proper_type(target)
+    if not _target_has_literal_widening_shape(target_p):
+        return False
+    source_p = get_proper_type(source)
+    if not isinstance(source_p, Instance) or source_p.last_known_value is None:
+        return False
+    if isinstance(target_p, Instance) and target_p.last_known_value is None:
+        return False
+    target_literals = _collect_literal_alternatives(target_p)
+    if not target_literals:
+        return False
+    source_lkv = source_p.last_known_value
+    return any(_literal_types_equivalent(source_lkv, alt) for alt in target_literals)
+
+
+def _collect_literal_alternatives(t: Type) -> list[LiteralType]:
+    proper = get_proper_type(t)
+    if isinstance(proper, LiteralType):
+        return [proper]
+    if isinstance(proper, Instance) and proper.last_known_value is not None:
+        return [proper.last_known_value]
+    if isinstance(proper, UnionType):
+        result: list[LiteralType] = []
+        for item in proper.items:
+            inner = get_proper_type(item)
+            if isinstance(inner, NoneType):
+                continue
+            result.extend(_collect_literal_alternatives(inner))
+        return result
+    if isinstance(proper, TypeAliasType):
+        return _collect_literal_alternatives(proper.expand_all_if_possible())
+    return []
+
+
+def _literal_types_equivalent(a: LiteralType, b: LiteralType) -> bool:
+    if not _literal_values_match(a.value, b.value):
+        return False
+    if isinstance(a.fallback, Instance) and isinstance(b.fallback, Instance):
+        return a.fallback.type is b.fallback.type
+    return is_same_type(a.fallback, b.fallback)
+
+
+def _literal_values_match(a: LiteralValue, b: LiteralValue) -> bool:
+    if a == b and type(a) is type(b):
+        return True
+    return False
+
+
+def _target_has_literal_widening_shape(target: Type) -> bool:
+    proper = get_proper_type(target)
+    if isinstance(proper, LiteralType):
+        return True
+    if isinstance(proper, UnionType):
+        return any(_target_has_literal_widening_shape(item) for item in proper.items)
+    if isinstance(proper, TypeAliasType):
+        return _target_has_literal_widening_shape(proper.expand_all_if_possible())
+    return False
+
+
+class _CollectionLiteralInfo:
+    __slots__ = ("formals_referencing", "shared_typevar_ids", "_callee_variables")
+
+    def __init__(self, callee: CallableType) -> None:
+        self.formals_referencing: list[set[TypeVarId]] = []
+        self._callee_variables: frozenset[TypeVarId] = frozenset(
+            v.id for v in callee.variables
+        )
+        ids_to_formal_count: dict[TypeVarId, int] = {}
+        for formal in callee.arg_types:
+            referenced: set[TypeVarId] = set()
+            for tv in get_type_vars(formal):
+                if tv.id in self._callee_variables:
+                    referenced.add(tv.id)
+            self.formals_referencing.append(referenced)
+            for tid in referenced:
+                ids_to_formal_count[tid] = ids_to_formal_count.get(tid, 0) + 1
+        self.shared_typevar_ids: frozenset[TypeVarId] = frozenset(
+            tid for tid, count in ids_to_formal_count.items() if count > 1
+        )
+
+    def formal_references_shared(self, formal_index: int) -> bool:
+        if formal_index >= len(self.formals_referencing):
+            return False
+        return bool(self.formals_referencing[formal_index] & self.shared_typevar_ids)
+
+    def candidate_formals(self) -> list[int]:
+        candidates: list[int] = []
+        for index, referenced in enumerate(self.formals_referencing):
+            if not referenced:
+                continue
+            if referenced.isdisjoint(self.shared_typevar_ids):
+                continue
+            candidates.append(index)
+        return candidates
+
+
+def _is_collection_literal_expression(expr: Expression) -> bool:
+    if isinstance(expr, (ListExpr, SetExpr, TupleExpr)):
+        return bool(expr.items)
+    if isinstance(expr, DictExpr):
+        return bool(expr.items)
+
+    if isinstance(expr, CallExpr) and _is_frozenset_call(expr):
+        if len(expr.args) == 1 and isinstance(expr.args[0], SetExpr):
+            return bool(expr.args[0].items)
+    return False
+
+
+def _is_frozenset_call(expr: CallExpr) -> bool:
+    callee = expr.callee
+    if isinstance(callee, NameExpr) and callee.name == "frozenset":
+        return True
+    return False
+
+
+def _formal_has_typevar_shared_with_others(
+    formal_index: int, info: _CollectionLiteralInfo
+) -> bool:
+    return info.formal_references_shared(formal_index)
+
+
+def _collection_literal_can_use_lkv(expr: Expression) -> bool:
+    items = _collection_literal_items(expr)
+    return any(_expression_is_literal_like(item) for item in items)
+
+
+def _collection_literal_items(expr: Expression) -> list[Expression]:
+    if isinstance(expr, (ListExpr, SetExpr, TupleExpr)):
+        return [item.expr if isinstance(item, StarExpr) else item for item in expr.items]
+    if isinstance(expr, DictExpr):
+        items: list[Expression] = []
+        for key, value in expr.items:
+            if key is not None:
+                items.append(key)
+            items.append(value)
+        return items
+    if isinstance(expr, CallExpr) and _is_frozenset_call(expr):
+        if len(expr.args) == 1 and isinstance(expr.args[0], SetExpr):
+            inner = expr.args[0]
+            return [item.expr if isinstance(item, StarExpr) else item for item in inner.items]
+    return []
+
+
+def _expression_is_literal_like(expr: Expression) -> bool:
+    """Return True when ``expr`` is an expression whose narrowed type carries a literal.
+
+    The second-pass collection-literal inference deferral relies on this filter
+    to skip arguments that the type checker could not tighten anyway. The set
+    of "literal-like" expressions is intentionally broad: every form below
+    surfaces either a real ``last_known_value`` or an explicit ``LiteralType``
+    once the type checker has finished its first pass over the argument.
+    """
+    if isinstance(expr, (StrExpr, BytesExpr, IntExpr, FloatExpr, ComplexExpr)):
+        return True
+    if isinstance(expr, NameExpr) and expr.name in {"True", "False", "None"}:
+        return True
+    if isinstance(expr, NameExpr) and _name_refers_to_final_literal(expr):
+        return True
+    if isinstance(expr, MemberExpr) and _member_refers_to_final_literal(expr):
+        return True
+    if isinstance(expr, UnaryExpr) and expr.op in {"-", "+"}:
+        return _expression_is_literal_like(expr.expr)
+    if isinstance(expr, ConditionalExpr):
+        return _expression_is_literal_like(expr.if_expr) and _expression_is_literal_like(
+            expr.else_expr
+        )
+    if isinstance(expr, (ListExpr, SetExpr, TupleExpr, DictExpr)):
+        return _is_collection_literal_expression(expr) and _collection_literal_can_use_lkv(expr)
+
+    if isinstance(expr, CallExpr) and _is_cast_call(expr):
+        inner = expr.args[1] if len(expr.args) >= 2 else None
+        return inner is not None and _expression_is_literal_like(inner)
+    if isinstance(expr, CallExpr) and _is_frozenset_call(expr):
+        if len(expr.args) == 1 and isinstance(expr.args[0], SetExpr):
+            return _collection_literal_can_use_lkv(expr.args[0])
+    return False
+
+
+def _is_cast_call(expr: CallExpr) -> bool:
+    callee = expr.callee
+    if isinstance(callee, NameExpr) and callee.name == "cast":
+        return True
+    if isinstance(callee, MemberExpr) and callee.name == "cast":
+        return True
+    return False
+
+
+def _name_refers_to_final_literal(expr: NameExpr) -> bool:
+    """Return True when ``expr`` resolves to a ``Final``-typed name carrying a literal.
+
+    Module-level or local Final declarations like ``APPLE: Final[Literal["apple"]] = "apple"``
+    behave indistinguishably from string literals at the call site. Treat
+    references to such names as literal-like so a downstream collection display
+    that contains them can still trigger the second-pass inference deferral.
+    """
+    node = expr.node
+    if not isinstance(node, Var):
+        return False
+    if not node.is_final:
+        return False
+    if node.type is None:
+        return False
+    return _type_is_literal_bearing(node.type)
+
+
+def _member_refers_to_final_literal(expr: MemberExpr) -> bool:
+    """Return True when ``expr`` resolves to a class-level ``Final`` literal attribute.
+
+    Allows references such as ``Constants.APPLE`` where ``Constants`` declares
+    ``APPLE: Final[Literal["apple"]] = "apple"`` to participate in the literal
+    detection path the same way a bare ``Literal`` would. The MemberExpr's own
+    ``node`` is typically unset at the point we run this query, so we look up
+    the attribute through the receiver's ``TypeInfo`` instead.
+    """
+    node = expr.node
+    if isinstance(node, Var) and node.is_final and node.type is not None:
+        return _type_is_literal_bearing(node.type)
+    receiver = expr.expr
+    if isinstance(receiver, RefExpr) and isinstance(receiver.node, TypeInfo):
+        sym = receiver.node.names.get(expr.name)
+        if sym is not None and isinstance(sym.node, Var):
+            inner = sym.node
+            if inner.is_final and inner.type is not None:
+                return _type_is_literal_bearing(inner.type)
+    return False
+
+
+def _type_is_literal_bearing(t: Type) -> bool:
+    """Return True when ``t`` carries at least one literal value.
+
+    Walks through ``UnionType`` items and ``TypeAliasType`` expansions so an
+    alias like ``Fruit = Literal["apple", "orange"]`` or a union form
+    ``Literal["apple"] | None`` is recognised the same as a bare
+    ``LiteralType``. ``Instance`` values are accepted as literal-bearing when
+    they carry a ``last_known_value``, which is how mypy records the narrowed
+    constant of a Final-typed primitive.
+    """
+    proper = get_proper_type(t)
+    if isinstance(proper, LiteralType):
+        return True
+    if isinstance(proper, Instance) and proper.last_known_value is not None:
+        return True
+    if isinstance(proper, UnionType):
+        return any(_type_is_literal_bearing(item) for item in proper.items)
+    if isinstance(proper, TypeAliasType):
+        return _type_is_literal_bearing(proper.expand_all_if_possible())
+    return False
 
 
 def has_erased_component(t: Type | None) -> bool:

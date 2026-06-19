@@ -1,0 +1,302 @@
+[case testLiteralCastNotRedundantStringUnion]
+# flags: --warn-redundant-casts
+from typing import Literal, cast
+Fruit = Literal["apple", "orange"]
+x = cast(Fruit, "apple")
+reveal_type(x)  # N: Revealed type is "Literal['apple'] | Literal['orange']"
+[builtins fixtures/tuple.pyi]
+
+[case testLiteralCastNotRedundantSingleString]
+# flags: --warn-redundant-casts
+from typing import Literal, cast
+x = cast(Literal["a"], "a")
+reveal_type(x)  # N: Revealed type is "Literal['a']"
+[builtins fixtures/tuple.pyi]
+
+[case testLiteralCastNotRedundantIntUnion]
+# flags: --warn-redundant-casts
+from typing import Literal, cast
+Mode = Literal[1, 2, 3]
+x = cast(Mode, 1)
+reveal_type(x)  # N: Revealed type is "Literal[1] | Literal[2] | Literal[3]"
+[builtins fixtures/tuple.pyi]
+
+[case testLiteralCastNotRedundantBoolUnion]
+# flags: --warn-redundant-casts
+from typing import Literal, cast
+Flag = Literal[True, False]
+x = cast(Flag, True)
+reveal_type(x)  # N: Revealed type is "Literal[True] | Literal[False]"
+[builtins fixtures/tuple.pyi]
+
+[case testLiteralCastInFunctionCallList]
+# flags: --warn-redundant-casts
+from typing import Literal, TypeVar, cast
+from typing import Mapping, Sequence
+T = TypeVar("T")
+Fruit = Literal["apple", "orange"]
+def function(seq1: Mapping[T, str], seq2: Sequence[T]) -> T: ...
+all_fruits: Mapping[Fruit, str] = {"apple": "a", "orange": "o"}
+result = function(all_fruits, [cast(Fruit, "apple")])
+reveal_type(result)  # N: Revealed type is "Literal['apple'] | Literal['orange']"
+[builtins fixtures/dict.pyi]
+
+[case testLiteralListLiteralInferredFromSharedTypeVar]
+# flags: --warn-redundant-casts
+from typing import Literal, TypeVar
+from typing import Mapping, Sequence
+T = TypeVar("T")
+Fruit = Literal["apple", "orange"]
+def function(seq1: Mapping[T, str], seq2: Sequence[T]) -> T: ...
+all_fruits: Mapping[Fruit, str] = {"apple": "a", "orange": "o"}
+result = function(all_fruits, ["apple"])
+reveal_type(result)  # N: Revealed type is "Literal['apple'] | Literal['orange']"
+[builtins fixtures/dict.pyi]
+
+[case testLiteralListLiteralMultipleElements]
+# flags: --warn-redundant-casts
+from typing import Literal, TypeVar
+from typing import Mapping, Sequence
+T = TypeVar("T")
+Fruit = Literal["apple", "orange"]
+def function(seq1: Mapping[T, str], seq2: Sequence[T]) -> T: ...
+all_fruits: Mapping[Fruit, str] = {"apple": "a", "orange": "o"}
+result = function(all_fruits, ["apple", "orange"])
+reveal_type(result)  # N: Revealed type is "Literal['apple'] | Literal['orange']"
+[builtins fixtures/dict.pyi]
+
+[case testLiteralListLiteralInferredFromSharedTypeVarOrder]
+# flags: --warn-redundant-casts
+from typing import Literal, TypeVar
+from typing import Mapping, Sequence
+T = TypeVar("T")
+Fruit = Literal["apple", "orange"]
+def function(seq1: Sequence[T], seq2: Mapping[T, str]) -> T: ...
+all_fruits: Mapping[Fruit, str] = {"apple": "a", "orange": "o"}
+result = function(["apple"], all_fruits)
+reveal_type(result)  # N: Revealed type is "Literal['apple'] | Literal['orange']"
+[builtins fixtures/dict.pyi]
+
+[case testLiteralDictKeysInferredFromSharedTypeVar]
+# flags: --warn-redundant-casts
+from typing import Literal, TypeVar
+from typing import Mapping, Sequence
+T = TypeVar("T")
+Fruit = Literal["apple", "orange"]
+def function(seq1: Mapping[T, str], seq2: Mapping[T, str]) -> T: ...
+all_fruits: Mapping[Fruit, str] = {"apple": "a", "orange": "o"}
+result = function(all_fruits, {"apple": "x"})
+reveal_type(result)  # N: Revealed type is "Literal['apple'] | Literal['orange']"
+[builtins fixtures/dict.pyi]
+
+[case testLiteralFunctionCallWithCastInList]
+# flags: --warn-redundant-casts
+from typing import Literal, TypeVar, cast
+from typing import Mapping, Sequence
+T = TypeVar("T")
+Fruit = Literal["apple", "orange"]
+def function(seq1: Mapping[T, str], seq2: Sequence[T]) -> T: ...
+all_fruits: Mapping[Fruit, str] = {"apple": "a", "orange": "o"}
+result = function(all_fruits, [cast(Fruit, "apple"), cast(Fruit, "orange")])
+reveal_type(result)  # N: Revealed type is "Literal['apple'] | Literal['orange']"
+[builtins fixtures/dict.pyi]
+
+[case testLiteralCastNotRedundantTypeAlias]
+# flags: --warn-redundant-casts
+from typing import Literal, cast
+Fruit = Literal["apple", "orange"]
+PluralFruit = Fruit
+x = cast(PluralFruit, "apple")
+reveal_type(x)  # N: Revealed type is "Literal['apple'] | Literal['orange']"
+[builtins fixtures/tuple.pyi]
+
+[case testLiteralListInferenceWithThreeArgs]
+# flags: --warn-redundant-casts
+from typing import Literal, TypeVar
+from typing import Mapping, Sequence
+T = TypeVar("T")
+Tag = Literal["a", "b", "c"]
+def function(m: Mapping[T, int], s: Sequence[T], extra: T) -> T: ...
+tags: Mapping[Tag, int] = {"a": 1, "b": 2, "c": 3}
+result = function(tags, ["a", "b"], "c")
+reveal_type(result)  # N: Revealed type is "Literal['a'] | Literal['b'] | Literal['c']"
+[builtins fixtures/dict.pyi]
+
+[case testLiteralListLiteralInferredViaContextOnlyTwoArgs]
+# flags: --warn-redundant-casts
+from typing import Literal, TypeVar
+from typing import Sequence
+T = TypeVar("T")
+Tag = Literal["red", "green", "blue"]
+def function(seq: Sequence[T], default: T) -> T: ...
+default: Tag = "blue"
+result = function(["red"], default)
+reveal_type(result)  # N: Revealed type is "Literal['red'] | Literal['green'] | Literal['blue']"
+[builtins fixtures/list.pyi]
+
+[case testLiteralSetLiteralInferredFromSharedTypeVar]
+# flags: --warn-redundant-casts
+from typing import Literal, TypeVar, Set
+from typing import Mapping
+T = TypeVar("T")
+Tag = Literal["red", "green", "blue"]
+def function(seq1: Mapping[T, int], seq2: Set[T]) -> T: ...
+tags: Mapping[Tag, int]
+result = function(tags, {"red", "blue"})
+reveal_type(result)  # N: Revealed type is "Literal['red'] | Literal['green'] | Literal['blue']"
+[builtins fixtures/set.pyi]
+
+[case testLiteralListLiteralInferredFromNegativeIntLiteral]
+# flags: --warn-redundant-casts
+from typing import Literal, TypeVar
+from typing import Mapping, Sequence
+T = TypeVar("T")
+Code = Literal[-1, 0, 1]
+def function(seq1: Mapping[T, str], seq2: Sequence[T]) -> T: ...
+codes: Mapping[Code, str] = {-1: "neg", 0: "zero", 1: "pos"}
+result = function(codes, [-1, 0])
+reveal_type(result)  # N: Revealed type is "Literal[-1] | Literal[0] | Literal[1]"
+[builtins fixtures/dict-full.pyi]
+
+[case testLiteralListLiteralInferredFromConditional]
+# flags: --warn-redundant-casts
+from typing import Literal, TypeVar
+from typing import Mapping, Sequence
+T = TypeVar("T")
+Fruit = Literal["apple", "orange"]
+def function(seq1: Mapping[T, str], seq2: Sequence[T]) -> T: ...
+all_fruits: Mapping[Fruit, str] = {"apple": "a", "orange": "o"}
+flag = True
+result = function(all_fruits, ["apple" if flag else "orange"])
+reveal_type(result)  # N: Revealed type is "Literal['apple'] | Literal['orange']"
+[builtins fixtures/dict.pyi]
+
+[case testLiteralCastNotRedundantNegativeIntLiteral]
+# flags: --warn-redundant-casts
+from typing import Literal, cast
+Code = Literal[-1, 0, 1]
+x = cast(Code, -1)
+reveal_type(x)  # N: Revealed type is "Literal[-1] | Literal[0] | Literal[1]"
+[builtins fixtures/tuple.pyi]
+
+[case testCollectionDisplayInferenceWithConcreteNonLiteralPin]
+from typing import TypeVar, Sequence
+T = TypeVar("T")
+def function(x: T, seq: Sequence[T]) -> T: ...
+n: int = 1
+reveal_type(function(n, [1, 2]))  # N: Revealed type is "builtins.int"
+reveal_type(function(n, ["a"]))  # N: Revealed type is "builtins.int" \
+                                 # E: List item 0 has incompatible type "str"; expected "int"
+[builtins fixtures/list.pyi]
+
+[case testLiteralDictValuesInferredFromSharedTypeVar]
+# flags: --warn-redundant-casts
+from typing import Literal, TypeVar, Dict
+from typing import Mapping
+T = TypeVar("T")
+Tag = Literal["x", "y"]
+def function(m: Mapping[T, str], d: Dict[str, T]) -> T: ...
+tags: Mapping[Tag, str] = {"x": "ex", "y": "why"}
+result = function(tags, {"a": "x", "b": "y"})
+reveal_type(result)  # N: Revealed type is "Literal['x'] | Literal['y']"
+[builtins fixtures/dict.pyi]
+
+[case testLiteralFrozensetLiteralInferredFromSharedTypeVar]
+# flags: --warn-redundant-casts
+from typing import Literal, TypeVar, FrozenSet, Mapping
+T = TypeVar("T")
+Tag = Literal["x", "y", "z"]
+def function(m: Mapping[T, int], s: FrozenSet[T]) -> T: ...
+tags: Mapping[Tag, int]
+result = function(tags, frozenset({"x", "y"}))
+reveal_type(result)  # N: Revealed type is "Literal['x'] | Literal['y'] | Literal['z']"
+[builtins fixtures/primitives.pyi]
+
+[case testLiteralCastInsideListInferredFromSharedTypeVar]
+# flags: --warn-redundant-casts
+from typing import Literal, TypeVar, Mapping, Sequence, cast
+T = TypeVar("T")
+Color = Literal["red", "green", "blue"]
+def function(m: Mapping[T, int], s: Sequence[T]) -> T: ...
+colors: Mapping[Color, int] = {"red": 1, "green": 2, "blue": 3}
+result = function(colors, [cast(Color, "red"), cast(Color, "green")])
+reveal_type(result)  # N: Revealed type is "Literal['red'] | Literal['green'] | Literal['blue']"
+[builtins fixtures/dict.pyi]
+
+[case testLiteralCastInsideTupleInferredFromSharedTypeVar]
+# flags: --warn-redundant-casts
+from typing import Literal, TypeVar, Mapping, Tuple, cast
+T = TypeVar("T")
+Color = Literal["red", "green", "blue"]
+def function(m: Mapping[T, int], t: Tuple[T, ...]) -> T: ...
+colors: Mapping[Color, int]
+result = function(colors, (cast(Color, "red"),))
+reveal_type(result)  # N: Revealed type is "Literal['red'] | Literal['green'] | Literal['blue']"
+[builtins fixtures/tuple.pyi]
+
+[case testLiteralListInferredFromFinalLiteralName]
+# flags: --warn-redundant-casts
+from typing import Final, Literal, TypeVar
+from typing import Mapping, Sequence
+T = TypeVar("T")
+Fruit = Literal["apple", "orange"]
+APPLE: Final[Literal["apple"]] = "apple"
+ORANGE: Final[Literal["orange"]] = "orange"
+def function(seq1: Mapping[T, str], seq2: Sequence[T]) -> T: ...
+all_fruits: Mapping[Fruit, str] = {"apple": "a", "orange": "o"}
+result = function(all_fruits, [APPLE, ORANGE])
+reveal_type(result)  # N: Revealed type is "Literal['apple'] | Literal['orange']"
+[builtins fixtures/dict.pyi]
+
+[case testLiteralDictInferredFromFinalLiteralKey]
+# flags: --warn-redundant-casts
+from typing import Final, Literal, TypeVar
+from typing import Mapping
+T = TypeVar("T")
+Fruit = Literal["apple", "orange"]
+APPLE: Final[Literal["apple"]] = "apple"
+def function(seq1: Mapping[T, str], seq2: Mapping[T, str]) -> T: ...
+all_fruits: Mapping[Fruit, str] = {"apple": "a", "orange": "o"}
+result = function(all_fruits, {APPLE: "x"})
+reveal_type(result)  # N: Revealed type is "Literal['apple'] | Literal['orange']"
+[builtins fixtures/dict.pyi]
+
+[case testLiteralListInferredFromClassLevelFinalMember]
+# flags: --warn-redundant-casts
+from typing import Final, Literal, TypeVar
+from typing import Mapping, Sequence
+T = TypeVar("T")
+Fruit = Literal["apple", "orange"]
+class Constants:
+    APPLE: Final[Literal["apple"]] = "apple"
+    ORANGE: Final[Literal["orange"]] = "orange"
+def function(seq1: Mapping[T, str], seq2: Sequence[T]) -> T: ...
+all_fruits: Mapping[Fruit, str] = {"apple": "a", "orange": "o"}
+result = function(all_fruits, [Constants.APPLE, Constants.ORANGE])
+reveal_type(result)  # N: Revealed type is "Literal['apple'] | Literal['orange']"
+[builtins fixtures/dict.pyi]
+
+[case testLiteralListInferredFromNestedListLiteral]
+# flags: --warn-redundant-casts
+from typing import Literal, TypeVar
+from typing import Mapping, Sequence
+T = TypeVar("T")
+Fruit = Literal["apple", "orange"]
+def function(seq1: Mapping[T, str], seq2: Sequence[Sequence[T]]) -> T: ...
+all_fruits: Mapping[Fruit, str] = {"apple": "a", "orange": "o"}
+result = function(all_fruits, [["apple", "orange"]])
+reveal_type(result)  # N: Revealed type is "Literal['apple'] | Literal['orange']"
+[builtins fixtures/dict.pyi]
+
+[case testLiteralListInferredFromFinalNameMixedWithStringLiteral]
+# flags: --warn-redundant-casts
+from typing import Final, Literal, TypeVar
+from typing import Mapping, Sequence
+T = TypeVar("T")
+Fruit = Literal["apple", "orange"]
+APPLE: Final[Literal["apple"]] = "apple"
+def function(seq1: Mapping[T, str], seq2: Sequence[T]) -> T: ...
+all_fruits: Mapping[Fruit, str] = {"apple": "a", "orange": "o"}
+result = function(all_fruits, [APPLE, "orange"])
+reveal_type(result)  # N: Revealed type is "Literal['apple'] | Literal['orange']"
+[builtins fixtures/dict.pyi]
