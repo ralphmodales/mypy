@@ -848,7 +848,7 @@ class StubgenPythonSuite(DataSuite):
 
     required_out_section = True
     base_path = "."
-    files = ["stubgen.test"]
+    files = ["stubgen.test", "stubgen-attribute-docstrings.test"]
 
     @unittest.skipIf(sys.platform == "win32", "clean up fails on Windows")
     def run_case(self, testcase: DataDrivenTestCase) -> None:

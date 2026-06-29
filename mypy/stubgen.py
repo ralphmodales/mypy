@@ -542,6 +542,8 @@ class ASTStubGenerator(BaseStubGenerator, mypy.traverser.TraverserVisitor):
         self.processing_enum = False
         self.processing_dataclass = False
         self.dataclass_field_specifier: tuple[str, ...] = ()
+        self._pending_attr_docstring: str | None = None
+        self._module_docstring: str | None = None
 
     @property
     def _current_class(self) -> ClassDef | None:
@@ -552,8 +554,261 @@ class ASTStubGenerator(BaseStubGenerator, mypy.traverser.TraverserVisitor):
         self.path = o.path
         self.set_defined_names(find_defined_names(o))
         self.referenced_names = find_referenced_names(o)
-        super().visit_mypy_file(o)
+        if self._include_docstrings:
+            body = self._consume_module_docstring(o.defs)
+            self._visit_statements_with_attr_docstrings(body)
+        else:
+            for d in o.defs:
+                d.accept(self)
         self.check_undefined_names()
+
+    def _consume_module_docstring(self, body: list[Statement]) -> list[Statement]:
+        """Detect a PEP 257-style module docstring and remember it for output.
+
+        The module docstring is the first statement of a Python module when it
+        is a bare string literal. We strip it from the statement list so the
+        attribute-docstring pairing logic does not accidentally use it as a
+        docstring for a later assignment.
+        """
+        if not body:
+            return body
+        first = body[0]
+        if not isinstance(first, ExpressionStmt):
+            return body
+        if not isinstance(first.expr, StrExpr):
+            return body
+        self._module_docstring = first.expr.value
+        return body[1:]
+
+    def output(self) -> str:
+        rendered = super().output()
+        return self._prepend_module_docstring(rendered)
+
+    def _prepend_module_docstring(self, rendered: str) -> str:
+        """Render the captured PEP 257 module docstring at the head of the stub.
+
+        We emit the module docstring on top of imports, dunder-all listings,
+        and the regular body output. The docstring is normalized through the
+        same multi-line indenter the attribute docstring path uses so that
+        single- and multi-line module docstrings share a consistent layout.
+        When there is no module docstring captured, the rendered body is
+        returned unchanged.
+        """
+        if self._module_docstring is None:
+            return rendered
+        previous_indent = self._indent
+        self._indent = ""
+        try:
+            quoted = mypy.util.quote_docstring(self._module_docstring)
+            indented = self._indent_docstring(quoted)
+        finally:
+            self._indent = previous_indent
+        if not rendered:
+            return f"{indented}\n"
+        return f"{indented}\n\n{rendered}"
+
+    def _visit_statements_with_attr_docstrings(self, statements: list[Statement]) -> None:
+        """Walk a list of statements while pairing PEP 224-style attribute
+        docstrings with their preceding assignment statements.
+
+        A PEP 224 attribute docstring is a string-literal expression statement
+        that immediately follows an assignment to a name, used to document the
+        assigned variable. We detect these pairs so the docstring can be carried
+        through to the generated stub right after the corresponding assignment.
+        """
+        index = 0
+        total = len(statements)
+        while index < total:
+            stmt = statements[index]
+            next_stmt = statements[index + 1] if index + 1 < total else None
+            docstring = self._extract_attribute_docstring(stmt, next_stmt)
+            if docstring is not None:
+                self._pending_attr_docstring = docstring
+                stmt.accept(self)
+                self._pending_attr_docstring = None
+                index += 2
+                continue
+            stmt.accept(self)
+            index += 1
+
+    def _extract_attribute_docstring(
+        self, stmt: Statement, next_stmt: Statement | None
+    ) -> str | None:
+        """Return the PEP 224 docstring value attached to *stmt*, if any.
+
+        Returns the raw string value of *next_stmt* when *stmt* is an
+        assignment that can legitimately carry an attribute docstring and
+        *next_stmt* is a bare string-literal expression statement. Returns
+        None otherwise so the caller falls back to default iteration.
+        """
+        if next_stmt is None:
+            return None
+        if not isinstance(stmt, AssignmentStmt):
+            return None
+        if not self._is_bare_string_statement(next_stmt):
+            return None
+        if not self._assignment_can_have_docstring(stmt):
+            return None
+        assert isinstance(next_stmt, ExpressionStmt)
+        assert isinstance(next_stmt.expr, StrExpr)
+        return next_stmt.expr.value
+
+    def _is_bare_string_statement(self, stmt: Statement) -> bool:
+        """Return True when *stmt* is a standalone string-literal expression.
+
+        A PEP 224 docstring is encoded as an expression statement whose only
+        content is a string literal. We reject other shapes (calls returning
+        strings, f-strings interleaved with code, concatenated chains that
+        the parser folded into something other than a single ``StrExpr``).
+        """
+        if not isinstance(stmt, ExpressionStmt):
+            return False
+        if not isinstance(stmt.expr, StrExpr):
+            return False
+        return True
+
+    def _assignment_can_have_docstring(self, stmt: AssignmentStmt) -> bool:
+        """Decide whether *stmt* is eligible to be paired with a PEP 224 docstring.
+
+        Only plain attribute/variable assignments to simple names (or simple
+        tuple/list unpackings of names) qualify. Specialized assignment shapes
+        that stubgen rewrites via a different code path - namedtuple and
+        TypedDict call expressions, type alias bindings, and TypeVar-like
+        definitions - are excluded because attaching a per-field docstring to
+        their rewritten form would be ambiguous.
+        """
+        if not stmt.lvalues:
+            return False
+        if not self._all_lvalues_are_simple_names(stmt.lvalues):
+            return False
+        if self._rvalue_disqualifies_docstring(stmt.rvalue):
+            return False
+        if self._is_type_alias_assignment(stmt):
+            return False
+        return True
+
+    def _all_lvalues_are_simple_names(self, lvalues: list[Expression]) -> bool:
+        """Return True when every lvalue is a name (or a tuple/list of names)."""
+        for lvalue in lvalues:
+            if isinstance(lvalue, NameExpr):
+                continue
+            if isinstance(lvalue, (TupleExpr, ListExpr)):
+                if not all(isinstance(item, NameExpr) for item in lvalue.items):
+                    return False
+                continue
+            return False
+        return True
+
+    def _rvalue_disqualifies_docstring(self, rvalue: Expression) -> bool:
+        """Return True for rvalues that stubgen rewrites away from a simple line.
+
+        Namedtuple and TypedDict call expressions become class declarations,
+        and TypeVar-like definitions become bare exported names; neither
+        layout has a natural slot for a PEP 224-style attribute docstring,
+        so we let stubgen emit the rewritten form and drop the trailing
+        string instead of associating it with the rewritten statement.
+        """
+        if not isinstance(rvalue, CallExpr):
+            return False
+        if self.is_namedtuple(rvalue) or self.is_typed_namedtuple(rvalue):
+            return True
+        if self.is_typeddict(rvalue):
+            return True
+        if self.get_fullname(rvalue.callee) in TYPE_VAR_LIKE_NAMES:
+            return True
+        return False
+
+    def _is_type_alias_assignment(self, stmt: AssignmentStmt) -> bool:
+        """Return True when *stmt* is treated as a type alias by stubgen.
+
+        Stubgen converts those assignments into bare `Name = AliasTarget`
+        lines via `process_typealias`, so an attribute docstring following
+        such an assignment is dropped along with the alias body itself.
+        """
+        rvalue = stmt.rvalue
+        for lvalue in stmt.lvalues:
+            if not isinstance(lvalue, NameExpr):
+                continue
+            if self.is_private_name(lvalue.name):
+                continue
+            is_explicit_type_alias = (
+                stmt.unanalyzed_type and getattr(stmt.type, "name", None) == "TypeAlias"
+            )
+            if is_explicit_type_alias:
+                return True
+            if not stmt.unanalyzed_type and self.is_alias_expression(rvalue):
+                return True
+        return False
+
+    def _emit_attribute_docstring(self, docstring: str) -> None:
+        """Append a PEP 224 attribute docstring to the stub output.
+
+        The docstring is quoted with the standard helper and laid out at the
+        current scope indentation. Multi-line docstrings whose interior lines
+        share a common leading whitespace are renormalized so every line of
+        the rendered docstring picks up the current scope's indentation level
+        rather than keeping the column offsets the source happened to use.
+        """
+        rendered = self._format_attribute_docstring_for_render(docstring)
+        self.add(f"{rendered}\n")
+
+    def _indent_docstring(self, quoted: str) -> str:
+        """Indent a (possibly multi-line) quoted docstring to the current scope.
+
+        For single-line docstrings, the current indentation is prepended. For
+        multi-line docstrings, we determine the shared leading whitespace of
+        the non-empty interior lines and strip it before re-indenting every
+        non-empty line with the current indentation. Lines that contain only
+        whitespace are emitted as truly empty lines so the stub does not carry
+        trailing spaces inside a docstring block.
+        """
+        if "\n" not in quoted:
+            return f"{self._indent}{quoted}"
+        lines = quoted.split("\n")
+        interior_widths: list[int] = []
+        for line in lines[1:]:
+            stripped = line.lstrip()
+            if stripped:
+                interior_widths.append(len(line) - len(stripped))
+        common = min(interior_widths) if interior_widths else 0
+        rendered: list[str] = [f"{self._indent}{lines[0]}"]
+        for line in lines[1:]:
+            if not line.strip():
+                rendered.append("")
+                continue
+            rendered.append(f"{self._indent}{line[common:]}")
+        return "\n".join(rendered)
+
+    def _consume_pending_attribute_docstring(self) -> None:
+        """Emit any pending PEP 224 docstring at the current output position.
+
+        Called after a regular attribute or variable assignment has produced
+        at least one stub line. Clears the pending docstring afterwards so a
+        later non-eligible assignment never inherits a stale value.
+        """
+        if self._pending_attr_docstring is None:
+            return
+        self._emit_attribute_docstring(self._pending_attr_docstring)
+        self._pending_attr_docstring = None
+
+    def _discard_pending_attribute_docstring(self) -> None:
+        """Drop any pending PEP 224 docstring without writing it to the stub.
+
+        Used when the assignment that initially looked eligible turned out
+        not to produce any visible output, so attaching a freestanding
+        docstring to the following statement would be misleading.
+        """
+        self._pending_attr_docstring = None
+
+    def _format_attribute_docstring_for_render(self, docstring: str) -> str:
+        """Pre-render an attribute docstring exactly as it will appear in stubs.
+
+        This is the textual form that would be added to ``self._output`` and
+        is used by both the in-place emitter and any future callers that may
+        need to compose the docstring next to existing buffered content.
+        """
+        quoted = mypy.util.quote_docstring(docstring)
+        return self._indent_docstring(quoted)
 
     def visit_overloaded_func_def(self, o: OverloadedFuncDef) -> None:
         """@property with setters and getters, @overload chain and some others."""
@@ -958,8 +1213,12 @@ class ASTStubGenerator(BaseStubGenerator, mypy.traverser.TraverserVisitor):
     def visit_block(self, o: Block) -> None:
         # Unreachable statements may be partially uninitialized and that may
         # cause trouble.
-        if not o.is_unreachable:
-            super().visit_block(o)
+        if o.is_unreachable:
+            return
+        if self._include_docstrings:
+            self._visit_statements_with_attr_docstrings(o.body)
+            return
+        super().visit_block(o)
 
     def visit_assignment_stmt(self, o: AssignmentStmt) -> None:
         foundl = []
@@ -1015,6 +1274,10 @@ class ASTStubGenerator(BaseStubGenerator, mypy.traverser.TraverserVisitor):
 
         if all(foundl):
             self._state = VAR
+        if foundl and any(foundl):
+            self._consume_pending_attribute_docstring()
+        else:
+            self._discard_pending_attribute_docstring()
 
     def is_namedtuple(self, expr: CallExpr) -> bool:
         return self.get_fullname(expr.callee) == "collections.namedtuple"

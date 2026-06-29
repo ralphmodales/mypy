@@ -1,0 +1,422 @@
+[case testAttributeDocstringsModuleVariable]
+# flags:  --include-docstrings
+foo: int = 1
+"""Docstring for foo."""
+
+bar = 2
+"""Docstring for bar."""
+
+baz: str = "hello"
+"""Docstring for baz."""
+[out]
+foo: int
+"""Docstring for foo."""
+bar: int
+"""Docstring for bar."""
+baz: str
+"""Docstring for baz."""
+
+[case testAttributeDocstringsClassAttribute]
+# flags:  --include-docstrings
+class A:
+    """Class A docstring."""
+    name: str = "default"
+    """Docstring for name."""
+
+    count: int
+    """Docstring for count."""
+[out]
+class A:
+    """Class A docstring."""
+    name: str
+    """Docstring for name."""
+    count: int
+    """Docstring for count."""
+
+[case testAttributeDocstringsTypedDictClassSyntax]
+# flags:  --include-docstrings
+from typing import TypedDict
+from typing_extensions import NotRequired
+
+class ResourceAttrs(TypedDict, total=False):
+    """Shared resource attributes."""
+    name: NotRequired[str]
+    """Resource name."""
+    count: NotRequired[int]
+    """Resource count."""
+[out]
+from typing import TypedDict
+from typing_extensions import NotRequired
+
+class ResourceAttrs(TypedDict, total=False):
+    """Shared resource attributes."""
+    name: NotRequired[str]
+    """Resource name."""
+    count: NotRequired[int]
+    """Resource count."""
+
+[case testAttributeDocstringsDataclassField]
+# flags:  --include-docstrings
+from dataclasses import dataclass
+
+@dataclass
+class Foo:
+    """Foo dataclass."""
+    name: str
+    """Docstring for name."""
+    count: int = 0
+    """Docstring for count."""
+[out]
+from dataclasses import dataclass
+
+@dataclass
+class Foo:
+    """Foo dataclass."""
+    name: str
+    """Docstring for name."""
+    count: int = ...
+    """Docstring for count."""
+
+[case testAttributeDocstringsMixedWithMethods]
+# flags:  --include-docstrings
+class Service:
+    """Service class."""
+    host: str = "localhost"
+    """The host name."""
+    port: int = 8080
+    """The port number."""
+
+    def connect(self) -> None:
+        """Connect to host."""
+        ...
+
+    def disconnect(self) -> None:
+        ...
+[out]
+class Service:
+    """Service class."""
+    host: str
+    """The host name."""
+    port: int
+    """The port number."""
+    def connect(self) -> None:
+        """Connect to host."""
+    def disconnect(self) -> None: ...
+
+[case testAttributeDocstringsMultiline]
+# flags:  --include-docstrings
+foo: int = 1
+"""Docstring for foo.
+
+This is a longer description
+of what foo does."""
+[out]
+foo: int
+"""Docstring for foo.
+
+This is a longer description
+of what foo does."""
+
+[case testAttributeDocstringsNotAfterCallNoEffect]
+# flags:  --include-docstrings
+foo: int = 1
+"""Doc for foo."""
+
+print("hello")
+"""Should not be emitted as it follows a non-assignment."""
+
+bar: int = 2
+"""Doc for bar."""
+[out]
+foo: int
+"""Doc for foo."""
+bar: int
+"""Doc for bar."""
+
+[case testAttributeDocstringsPrivateNameSuppressed]
+# flags:  --include-docstrings
+_private: int = 1
+"""Should not appear."""
+
+public: int = 2
+"""Should appear."""
+[out]
+public: int
+"""Should appear."""
+
+[case testAttributeDocstringsFinal]
+# flags:  --include-docstrings
+from typing import Final
+
+MAX_SIZE: Final[int] = 100
+"""Maximum allowed size."""
+
+class Config:
+    """Config class."""
+    TIMEOUT: Final[float] = 30.0
+    """Connection timeout in seconds."""
+[out]
+from typing import Final
+
+MAX_SIZE: Final[int]
+"""Maximum allowed size."""
+
+class Config:
+    """Config class."""
+    TIMEOUT: Final[float]
+    """Connection timeout in seconds."""
+
+[case testAttributeDocstringsClassUnannotated]
+# flags:  --include-docstrings
+class Counter:
+    """Counter."""
+    value = 0
+    """Initial counter value."""
+    name = "default"
+    """Counter name."""
+[out]
+class Counter:
+    """Counter."""
+    value: int
+    """Initial counter value."""
+    name: str
+    """Counter name."""
+
+[case testAttributeDocstringsConsecutiveAttributes]
+# flags:  --include-docstrings
+a: int = 1
+"""Docstring for a."""
+b: int = 2
+"""Docstring for b."""
+c: int = 3
+"""Docstring for c."""
+[out]
+a: int
+"""Docstring for a."""
+b: int
+"""Docstring for b."""
+c: int
+"""Docstring for c."""
+
+[case testAttributeDocstringsRequired]
+# flags:  --include-docstrings
+from typing import TypedDict
+from typing_extensions import Required
+
+class Strict(TypedDict, total=False):
+    """Strict typed dict."""
+    name: Required[str]
+    """Name field, required."""
+    extra: str
+    """Extra field, optional."""
+[out]
+from typing import TypedDict
+from typing_extensions import Required
+
+class Strict(TypedDict, total=False):
+    """Strict typed dict."""
+    name: Required[str]
+    """Name field, required."""
+    extra: str
+    """Extra field, optional."""
+
+[case testAttributeDocstringsRawAndQuoted]
+# flags:  --include-docstrings
+foo: int = 1
+r"""Raw docstring \n preserved."""
+
+bar: str = "x"
+'''Triple-single docstring.'''
+[out]
+foo: int
+"""Raw docstring \\n preserved."""
+bar: str
+"""Triple-single docstring."""
+
+[case testAttributeDocstringsClassWithMethodsAndAttrs]
+# flags:  --include-docstrings
+class Mixed:
+    """Mixed class."""
+    field_a: int
+    """Documented field a."""
+
+    def method_a(self) -> None:
+        """Method a docstring."""
+        ...
+
+    field_b: str = "x"
+    """Documented field b."""
+
+    def method_b(self) -> int:
+        ...
+[out]
+class Mixed:
+    """Mixed class."""
+    field_a: int
+    """Documented field a."""
+    def method_a(self) -> None:
+        """Method a docstring."""
+    field_b: str
+    """Documented field b."""
+    def method_b(self) -> int: ...
+
+[case testAttributeDocstringsNotForAlias]
+# flags:  --include-docstrings
+from typing import List
+
+Vector = List[int]
+"""Should not be emitted because Vector is a type alias."""
+
+count: int = 5
+"""Should be emitted."""
+[out]
+Vector = list[int]
+count: int
+"""Should be emitted."""
+
+[case testAttributeDocstringsDataclassNoDefault]
+# flags:  --include-docstrings
+from dataclasses import dataclass
+
+@dataclass
+class Point:
+    """A point in 2D space."""
+    x: int
+    """X coordinate."""
+    y: int
+    """Y coordinate."""
+[out]
+from dataclasses import dataclass
+
+@dataclass
+class Point:
+    """A point in 2D space."""
+    x: int
+    """X coordinate."""
+    y: int
+    """Y coordinate."""
+
+[case testAttributeDocstringsDoesNotConsumeClassDocstring]
+# flags:  --include-docstrings
+class A:
+    """The class docstring should stay attached to the class."""
+
+class B:
+    """B's class docstring."""
+    x: int
+    """X's docstring."""
+[out]
+class A:
+    """The class docstring should stay attached to the class."""
+
+class B:
+    """B's class docstring."""
+    x: int
+    """X's docstring."""
+
+[case testAttributeDocstringsNoEmitOnSuppressedAssignment]
+# flags:  --include-docstrings
+__all__ = ["foo"]
+
+foo: int = 1
+"""Foo's docstring."""
+_hidden: int = 2
+"""Hidden's docstring - should not appear."""
+[out]
+foo: int
+"""Foo's docstring."""
+
+[case testAttributeDocstringsModuleLevelOnlyString]
+# flags:  --include-docstrings
+"""This is a module docstring."""
+
+foo: int = 1
+"""Attribute docstring for foo."""
+[out]
+"""This is a module docstring."""
+
+foo: int
+"""Attribute docstring for foo."""
+
+[case testAttributeDocstringsModuleDocstringAlone]
+# flags:  --include-docstrings
+"""Just a module docstring."""
+[out]
+"""Just a module docstring."""
+
+[case testAttributeDocstringsModuleDocstringMultiline]
+# flags:  --include-docstrings
+"""Module docstring.
+
+This is a description across multiple lines.
+"""
+
+foo: int = 1
+"""Foo's docstring."""
+[out]
+"""Module docstring.
+
+This is a description across multiple lines.
+"""
+
+foo: int
+"""Foo's docstring."""
+
+[case testAttributeDocstringsClassMultilineNormalized]
+# flags:  --include-docstrings
+class Container:
+    """Container."""
+    items: list
+    """The items list.
+
+    More details here.
+    """
+[out]
+class Container:
+    """Container."""
+    items: list
+    """The items list.
+
+    More details here.
+    """
+
+[case testAttributeDocstringsInNestedClass]
+# flags:  --include-docstrings
+class Outer:
+    """Outer class."""
+    outer_attr: int
+    """Outer attribute."""
+
+    class Inner:
+        """Inner class."""
+        inner_attr: str
+        """Inner attribute."""
+[out]
+class Outer:
+    """Outer class."""
+    outer_attr: int
+    """Outer attribute."""
+    class Inner:
+        """Inner class."""
+        inner_attr: str
+        """Inner attribute."""
+
+[case testAttributeDocstringsNotForNamedtupleCall]
+# flags:  --include-docstrings
+from collections import namedtuple
+
+Point = namedtuple("Point", ["x", "y"])
+"""Should not appear because Point is a namedtuple call."""
+
+foo: int = 1
+"""Should be emitted."""
+[out]
+from _typeshed import Incomplete
+from typing import NamedTuple
+
+class Point(NamedTuple):
+    x: Incomplete
+    y: Incomplete
+
+foo: int
+"""Should be emitted."""
