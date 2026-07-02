@@ -1,0 +1,269 @@
+[case testIdentityNarrowingAnyDoesNotWidenSentinel]
+import enum
+from typing import Any
+
+class SentinelType(enum.Enum):
+    SENTINEL = enum.auto()
+SENTINEL: SentinelType = SentinelType.SENTINEL
+
+x: Any = None
+if x is SENTINEL:
+    reveal_type(SENTINEL)  # N: Revealed type is "Literal[__main__.SentinelType.SENTINEL]"
+    reveal_type(x)  # N: Revealed type is "Literal[__main__.SentinelType.SENTINEL]"
+[builtins fixtures/primitives.pyi]
+
+[case testIdentityNarrowingAnyDoesNotWidenStr]
+from typing import Any
+
+x: Any = None
+y: str = "hello"
+if x is y:
+    reveal_type(y)  # N: Revealed type is "builtins.str"
+    reveal_type(x)  # N: Revealed type is "builtins.str"
+[builtins fixtures/primitives.pyi]
+
+[case testIdentityNarrowingAnyDoesNotWidenInt]
+from typing import Any
+
+x: Any = None
+y: int = 5
+if x is y:
+    reveal_type(y)  # N: Revealed type is "builtins.int"
+    reveal_type(x)  # N: Revealed type is "builtins.int"
+[builtins fixtures/primitives.pyi]
+
+[case testIdentityNarrowingAnyDoesNotWidenUnion]
+from typing import Any, Union
+
+class A: ...
+
+x: Any = None
+y: Union[A, int]
+if x is y:
+    reveal_type(y)  # N: Revealed type is "__main__.A | builtins.int"
+    reveal_type(x)  # N: Revealed type is "__main__.A | builtins.int"
+[builtins fixtures/primitives.pyi]
+
+[case testIdentityNarrowingAnyDoesNotWidenOptional]
+from typing import Any, Optional
+
+x: Any = None
+y: Optional[str] = None
+if x is y:
+    reveal_type(y)  # N: Revealed type is "builtins.str | None"
+    reveal_type(x)  # N: Revealed type is "builtins.str | None"
+[builtins fixtures/primitives.pyi]
+
+[case testIdentityNarrowingAnyReversedOrder]
+import enum
+from typing import Any
+
+class SentinelType(enum.Enum):
+    SENTINEL = enum.auto()
+SENTINEL: SentinelType = SentinelType.SENTINEL
+
+x: Any = None
+if SENTINEL is x:
+    reveal_type(SENTINEL)  # N: Revealed type is "Literal[__main__.SentinelType.SENTINEL]"
+    reveal_type(x)  # N: Revealed type is "Literal[__main__.SentinelType.SENTINEL]"
+[builtins fixtures/primitives.pyi]
+
+[case testIdentityNarrowingAnyIsNotBranch]
+import enum
+from typing import Any
+
+class SentinelType(enum.Enum):
+    SENTINEL = enum.auto()
+SENTINEL: SentinelType = SentinelType.SENTINEL
+
+x: Any = None
+if x is not SENTINEL:
+    reveal_type(SENTINEL)  # N: Revealed type is "__main__.SentinelType"
+    reveal_type(x)  # N: Revealed type is "Any"
+else:
+    reveal_type(SENTINEL)  # N: Revealed type is "Literal[__main__.SentinelType.SENTINEL]"
+    reveal_type(x)  # N: Revealed type is "Literal[__main__.SentinelType.SENTINEL]"
+[builtins fixtures/primitives.pyi]
+
+[case testIdentityNarrowingAnyRestoresAfterBlock]
+from typing import Any
+
+x: Any = None
+y: str = "hello"
+if x is y:
+    reveal_type(y)  # N: Revealed type is "builtins.str"
+reveal_type(y)  # N: Revealed type is "builtins.str"
+reveal_type(x)  # N: Revealed type is "Any"
+[builtins fixtures/primitives.pyi]
+
+[case testIdentityNarrowingAnyWithBoundedTypeVar]
+from typing import Any
+
+class Base: ...
+
+def f(y: Base) -> None:
+    x: Any = None
+    if x is y:
+        reveal_type(y)  # N: Revealed type is "__main__.Base"
+        reveal_type(x)  # N: Revealed type is "__main__.Base"
+[builtins fixtures/primitives.pyi]
+
+[case testIdentityNarrowingAnyPreservesFunctionParameter]
+from typing import Any
+
+def sentinel_check(sentinel: str, item: Any) -> None:
+    if item is sentinel:
+        reveal_type(sentinel)  # N: Revealed type is "builtins.str"
+        reveal_type(item)  # N: Revealed type is "builtins.str"
+    reveal_type(sentinel)  # N: Revealed type is "builtins.str"
+[builtins fixtures/primitives.pyi]
+
+[case testIdentityNarrowingAnyChainedIdentity]
+from typing import Any
+
+def f(x: Any, y: str, z: str) -> None:
+    if x is y is z:
+        reveal_type(x)  # N: Revealed type is "builtins.str"
+        reveal_type(y)  # N: Revealed type is "builtins.str"
+        reveal_type(z)  # N: Revealed type is "builtins.str"
+[builtins fixtures/primitives.pyi]
+
+[case testIdentityNarrowingAnyCustomClass]
+from typing import Any
+
+class Marker:
+    pass
+
+MARKER = Marker()
+
+def check(x: Any) -> None:
+    if x is MARKER:
+        reveal_type(MARKER)  # N: Revealed type is "__main__.Marker"
+        reveal_type(x)  # N: Revealed type is "__main__.Marker"
+[builtins fixtures/primitives.pyi]
+
+[case testIdentityNarrowingAnyPreservesLiteralSentinel]
+import enum
+from typing import Any, Literal
+
+class Kind(enum.Enum):
+    A = 1
+    B = 2
+
+def check(x: Any, k: Literal[Kind.A]) -> None:
+    if x is k:
+        reveal_type(k)  # N: Revealed type is "Literal[__main__.Kind.A]"
+        reveal_type(x)  # N: Revealed type is "Literal[__main__.Kind.A]"
+[builtins fixtures/primitives.pyi]
+
+[case testIdentityNarrowingAnyIsNotWithUnion]
+from typing import Any, Optional
+
+def check(x: Any, y: Optional[str]) -> None:
+    if x is not y:
+        reveal_type(y)  # N: Revealed type is "builtins.str | None"
+    else:
+        reveal_type(y)  # N: Revealed type is "builtins.str | None"
+        reveal_type(x)  # N: Revealed type is "builtins.str | None"
+[builtins fixtures/primitives.pyi]
+
+[case testIdentityNarrowingAnyPreservesDeclaredTypeAfterMultipleChecks]
+from typing import Any
+
+def check(x: Any, y: str, z: int) -> None:
+    if x is y:
+        reveal_type(y)  # N: Revealed type is "builtins.str"
+    if x is z:
+        reveal_type(z)  # N: Revealed type is "builtins.int"
+    reveal_type(y)  # N: Revealed type is "builtins.str"
+    reveal_type(z)  # N: Revealed type is "builtins.int"
+[builtins fixtures/primitives.pyi]
+
+[case testIdentityNarrowingUnionWithAnyPreservesWellTyped]
+from typing import Any, Union
+
+def f(x: str, y: Union[Any, int]) -> None:
+    if x is y:
+        reveal_type(x)  # N: Revealed type is "builtins.str"
+        reveal_type(y)  # N: Revealed type is "builtins.str"
+[builtins fixtures/primitives.pyi]
+
+[case testIdentityNarrowingOptionalAnyPreservesWellTyped]
+from typing import Any, Optional
+
+def f(x: str, y: Optional[Any]) -> None:
+    if x is y:
+        reveal_type(x)  # N: Revealed type is "builtins.str"
+        reveal_type(y)  # N: Revealed type is "builtins.str"
+[builtins fixtures/primitives.pyi]
+
+[case testIdentityNarrowingUnionAnyAnyPreservesWellTyped]
+from typing import Any, Union
+
+def f(x: str, y: Union[Any, Any]) -> None:
+    if x is y:
+        reveal_type(x)  # N: Revealed type is "builtins.str"
+        reveal_type(y)  # N: Revealed type is "builtins.str"
+[builtins fixtures/primitives.pyi]
+
+[case testIdentityNarrowingUnionAnyWithConcreteOverlap]
+from typing import Any, Union
+
+def f(x: int, y: Union[Any, str]) -> None:
+    if x is y:
+        reveal_type(x)  # N: Revealed type is "builtins.int"
+        reveal_type(y)  # N: Revealed type is "builtins.int"
+[builtins fixtures/primitives.pyi]
+
+[case testIdentityNarrowingUnionAnyWithMultipleConcreteMembers]
+from typing import Any, Union
+
+def f(x: bytes, y: Union[Any, int, str]) -> None:
+    if x is y:
+        reveal_type(x)  # N: Revealed type is "builtins.bytes"
+        reveal_type(y)  # N: Revealed type is "builtins.bytes"
+[builtins fixtures/primitives.pyi]
+
+[case testIdentityNarrowingReceiverIsAnyTargetTyped]
+from typing import Any
+
+def f(x: Any, y: str) -> None:
+    if x is y:
+        reveal_type(x)  # N: Revealed type is "builtins.str"
+        reveal_type(y)  # N: Revealed type is "builtins.str"
+[builtins fixtures/primitives.pyi]
+
+[case testIdentityNarrowingWithSentinelInDictLookup]
+import enum
+from typing import Any
+
+class Sentinel(enum.Enum):
+    MISSING = enum.auto()
+MISSING: Sentinel = Sentinel.MISSING
+
+def get_value(value: Any) -> None:
+    if value is MISSING:
+        reveal_type(MISSING)  # N: Revealed type is "Literal[__main__.Sentinel.MISSING]"
+        reveal_type(value)  # N: Revealed type is "Literal[__main__.Sentinel.MISSING]"
+[builtins fixtures/primitives.pyi]
+
+[case testIdentityNarrowingAnyPreservesTupleType]
+from typing import Any, Tuple
+
+def f(x: Any, y: Tuple[int, str]) -> None:
+    if x is y:
+        reveal_type(y)  # N: Revealed type is "tuple[builtins.int, builtins.str]"
+        reveal_type(x)  # N: Revealed type is "tuple[builtins.int, builtins.str]"
+[builtins fixtures/tuple.pyi]
+
+[case testIdentityNarrowingUnionAnyDoesNotAffectIsInstance]
+from typing import Any
+
+class C: ...
+class D(C): ...
+
+def f(c: C, y: Any) -> None:
+    if c is y:
+        reveal_type(c)  # N: Revealed type is "__main__.C"
+        reveal_type(y)  # N: Revealed type is "__main__.C"
+[builtins fixtures/isinstancelist.pyi]

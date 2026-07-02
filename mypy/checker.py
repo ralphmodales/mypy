@@ -8748,10 +8748,21 @@ def conditional_types(
 
     if isinstance(p_current_type, AnyType):
         return proposed_type, current_type
+    if from_equality and _equality_target_only_carries_any_information(proposed_type):
+        return _preserve_current_narrowing(current_type, default)
+    if from_equality and _equality_target_contains_any_component(proposed_type):
+        projection = _project_target_removing_any_placeholders(proposed_type)
+        if projection is None or not is_overlapping_types(
+            p_current_type, projection, ignore_promotions=True
+        ):
+            return _preserve_current_narrowing(current_type, default)
+        if _current_is_proper_subtype_of_projection(p_current_type, projection):
+            return _preserve_current_narrowing(current_type, default)
+        proposed_type = projection
     if isinstance(proposed_type, AnyType):
-        # We don't really know much about the proposed type, so we shouldn't
-        # attempt to narrow anything. Instead, we broaden the expr to Any to
-        # avoid false positives
+        # We keep the historical widening for isinstance-style narrowing since
+        # the developer explicitly asked for a runtime check that produces an
+        # Any-typed result.
         return proposed_type, default
     if not any(type_range.is_upper_bound for type_range in proposed_type_ranges):
         # concrete subtype
@@ -8796,6 +8807,206 @@ def conditional_types(
         proposed_type = default if default is not None else current_type
 
     return proposed_type, remaining_type
+
+
+def _equality_target_only_carries_any_information(target: Type) -> bool:
+    """Return True when an equality-narrowing target carries no facts beyond Any.
+
+    Equality-style narrowings (``x is y``, ``x is not y``, and ``x == y`` /
+    ``x != y`` for types without a custom ``__eq__``) can refine the receiver
+    only when the target adds something the type checker did not already
+    know. A target that is exactly ``Any``, or a union whose members are all
+    ``Any``-like, adds nothing at all. Recurses through unions, type
+    variables with an ``Any`` upper bound, ``type[Any]``, and partial types.
+    Concrete structural containers such as ``list[Any]`` or ``tuple[Any, ...]``
+    are *not* treated as uninformative: the outer container shape still
+    carries genuine narrowing information even if its parameters are ``Any``.
+    """
+    return _equality_target_only_carries_any_information_impl(target, 0)
+
+
+def _equality_target_only_carries_any_information_impl(
+    target: Type, depth: int
+) -> bool:
+    if depth >= _EQUALITY_ANY_RECURSION_LIMIT:
+        return False
+    proper = get_proper_type(target)
+    if isinstance(proper, AnyType):
+        return True
+    if isinstance(proper, UnionType):
+        for item in proper.items:
+            if not _equality_target_only_carries_any_information_impl(item, depth + 1):
+                return False
+        return True
+    if isinstance(proper, TypeVarType):
+        if proper.values:
+            return False
+        return _equality_target_only_carries_any_information_impl(
+            proper.upper_bound, depth + 1
+        )
+    if isinstance(proper, TypeType):
+        return _equality_target_only_carries_any_information_impl(proper.item, depth + 1)
+    if isinstance(proper, PartialType):
+        return True
+    return False
+
+
+def _equality_target_contains_any_component(target: Type) -> bool:
+    """Return True when any component of the equality target expands to Any.
+
+    Used to decide whether an equality-style narrowing would silently widen
+    a well-typed receiver via an ``Any``-tainted union member. Recurses
+    through unions, type variable upper bounds and value constraints, and
+    ``type[...]`` so that shapes such as ``Union[Any, int]``,
+    ``Optional[Any]``, ``TypeVar('T', bound=Any)`` and ``type[Any]`` are
+    all detected as Any-carrying. Concrete structural containers such as
+    ``list[Any]``, ``tuple[int, Any]`` and ``Callable[..., Any]`` are *not*
+    walked through: the outer container is a concrete narrowing target
+    that mypy can already handle correctly through normal isinstance-like
+    narrowing, and treating them as Any-flavoured here would suppress the
+    unreachable-branch analysis for values that provably cannot be that
+    container shape. A recursion depth bound guards against infinite
+    expansion on self-referential recursive type aliases.
+    """
+    return _equality_target_contains_any_component_impl(target, 0)
+
+
+def _equality_target_contains_any_component_impl(target: Type, depth: int) -> bool:
+    if depth >= _EQUALITY_ANY_RECURSION_LIMIT:
+        return False
+    proper = get_proper_type(target)
+    if isinstance(proper, AnyType):
+        return True
+    if isinstance(proper, UnionType):
+        for item in proper.items:
+            if _equality_target_contains_any_component_impl(item, depth + 1):
+                return True
+        return False
+    if isinstance(proper, TypeVarType):
+        if proper.values:
+            for value in proper.values:
+                if _equality_target_contains_any_component_impl(value, depth + 1):
+                    return True
+            return False
+        return _equality_target_contains_any_component_impl(
+            proper.upper_bound, depth + 1
+        )
+    if isinstance(proper, TypeType):
+        return _equality_target_contains_any_component_impl(proper.item, depth + 1)
+    return False
+
+
+def _project_target_removing_any_placeholders(target: Type) -> Type | None:
+    """Return the informative projection of *target* with Any placeholders removed.
+
+    Equality-style narrowing should never widen the receiver via the Any
+    branch of an Any-tainted target. This helper returns the projection of
+    the target that carries genuine narrowing information:
+
+    * A bare ``Any`` collapses to ``None``, meaning there is nothing
+      concrete to narrow with.
+    * A union with Any-only members simplifies to a union of its concrete
+      members. If every member is Any-only, the projection is ``None``.
+    * A type variable with an Any bound and no value constraints collapses
+      to ``None`` in the same way; a type variable with concrete value
+      constraints is projected through its constraint set.
+    * ``type[Any]`` collapses to ``None``.
+    * Structural containers (tuples, callables, generic instances) with
+      Any-tainted parts keep their outer shape because that shape still
+      carries narrowing information; only union-level Any placeholders are
+      stripped.
+    """
+    return _project_target_removing_any_placeholders_impl(target, 0)
+
+
+def _project_target_removing_any_placeholders_impl(
+    target: Type, depth: int
+) -> Type | None:
+    if depth >= _EQUALITY_ANY_RECURSION_LIMIT:
+        return get_proper_type(target)
+    proper = get_proper_type(target)
+    if isinstance(proper, AnyType):
+        return None
+    if isinstance(proper, UnionType):
+        concrete_items: list[Type] = []
+        for item in proper.items:
+            item_proper = get_proper_type(item)
+            if isinstance(item_proper, AnyType):
+                continue
+            if _equality_target_only_carries_any_information(item_proper):
+                continue
+            projected_item = _project_target_removing_any_placeholders_impl(
+                item_proper, depth + 1
+            )
+            if projected_item is None:
+                continue
+            concrete_items.append(projected_item)
+        if not concrete_items:
+            return None
+        if len(concrete_items) == 1:
+            return concrete_items[0]
+        return make_simplified_union(concrete_items)
+    if isinstance(proper, TypeVarType):
+        if proper.values:
+            projected_values: list[Type] = []
+            for value in proper.values:
+                value_projection = _project_target_removing_any_placeholders_impl(
+                    value, depth + 1
+                )
+                if value_projection is not None:
+                    projected_values.append(value_projection)
+            if not projected_values:
+                return None
+            if len(projected_values) == 1:
+                return projected_values[0]
+            return make_simplified_union(projected_values)
+        bound_proper = get_proper_type(proper.upper_bound)
+        if isinstance(bound_proper, AnyType):
+            return None
+        return proper
+    if isinstance(proper, TypeType):
+        inner_projection = _project_target_removing_any_placeholders_impl(
+            proper.item, depth + 1
+        )
+        if inner_projection is None:
+            return None
+        return TypeType.make_normalized(inner_projection)
+    if isinstance(proper, PartialType):
+        return None
+    return proper
+
+
+def _current_is_proper_subtype_of_projection(current: Type, projection: Type) -> bool:
+    """Return True when *current* is already a proper subtype of *projection*.
+
+    When the receiver's declared type is already narrower than the concrete
+    projection of an Any-tainted target, running the narrowing again would
+    be a no-op at best and a subtle widening at worst (for example, when
+    the projection is a union that includes the receiver plus other
+    branches). In that case the safest and most useful answer is to keep
+    the receiver's current type unchanged. This preserves invariants like
+    ``x: MySentinel`` staying ``MySentinel`` after ``x is other`` where
+    ``other: Any``, and ``x: int`` staying ``int`` after ``x is y`` where
+    ``y: Union[int, Any]``.
+    """
+    return is_proper_subtype(current, projection, ignore_promotions=True)
+
+
+def _preserve_current_narrowing(
+    current_type: Type, default: Type | None
+) -> tuple[Type, Type | None]:
+    """Return the equality-narrowing result that leaves *current_type* intact.
+
+    Used when the comparison target adds no facts beyond what the receiver
+    already knows. The True branch keeps the receiver's declared type
+    unchanged, and the False branch delegates to the caller-provided default
+    (which is typically ``None`` for the top-level call and the original
+    union member for the union-factorisation recursion).
+    """
+    return current_type, default
+
+
+_EQUALITY_ANY_RECURSION_LIMIT = 32
 
 
 def conditional_types_to_typemaps(
