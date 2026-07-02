@@ -273,6 +273,7 @@ from mypy.types import (
     LiteralType,
     NoneType,
     Overloaded,
+    ParamSpecType,
     PartialType,
     ProperType,
     TupleType,
@@ -8748,17 +8749,21 @@ def conditional_types(
 
     if isinstance(p_current_type, AnyType):
         return proposed_type, current_type
-    if from_equality and _equality_target_only_carries_any_information(proposed_type):
-        return _preserve_current_narrowing(current_type, default)
-    if from_equality and _equality_target_contains_any_component(proposed_type):
-        projection = _project_target_removing_any_placeholders(proposed_type)
-        if projection is None or not is_overlapping_types(
-            p_current_type, projection, ignore_promotions=True
-        ):
+    if from_equality:
+        normalized_target = _normalize_equality_target(proposed_type)
+        if _equality_target_only_carries_any_information(normalized_target):
             return _preserve_current_narrowing(current_type, default)
-        if _current_is_proper_subtype_of_projection(p_current_type, projection):
-            return _preserve_current_narrowing(current_type, default)
-        proposed_type = projection
+        if _equality_target_contains_any_component(normalized_target):
+            projection = _project_target_removing_any_placeholders(normalized_target)
+            if projection is None or not is_overlapping_types(
+                p_current_type, projection, ignore_promotions=True
+            ):
+                return _preserve_current_narrowing(current_type, default)
+            if _current_is_proper_subtype_of_projection(p_current_type, projection):
+                return _preserve_current_narrowing(current_type, default)
+            if _receiver_shares_only_any_tainted_atoms(p_current_type, projection):
+                return _preserve_current_narrowing(current_type, default)
+            proposed_type = projection
     if isinstance(proposed_type, AnyType):
         # We keep the historical widening for isinstance-style narrowing since
         # the developer explicitly asked for a runtime check that produces an
@@ -8817,37 +8822,89 @@ def _equality_target_only_carries_any_information(target: Type) -> bool:
     only when the target adds something the type checker did not already
     know. A target that is exactly ``Any``, or a union whose members are all
     ``Any``-like, adds nothing at all. Recurses through unions, type
-    variables with an ``Any`` upper bound, ``type[Any]``, and partial types.
-    Concrete structural containers such as ``list[Any]`` or ``tuple[Any, ...]``
-    are *not* treated as uninformative: the outer container shape still
-    carries genuine narrowing information even if its parameters are ``Any``.
+    variables with an ``Any`` upper bound, ``ParamSpec`` and
+    ``TypeVarTuple`` bounds, ``type[Any]``, ``NewType`` wrappers around
+    ``Any``, ``LiteralType`` fallbacks, dynamic ``class Foo(Any)`` bases,
+    and partial types. Concrete structural containers such as
+    ``list[Any]`` or ``tuple[Any, ...]`` are *not* treated as
+    uninformative: the outer container shape still carries genuine
+    narrowing information even if its parameters are ``Any``.
     """
-    return _equality_target_only_carries_any_information_impl(target, 0)
+    return _equality_target_only_carries_any_information_impl(target, 0, frozenset())
 
 
 def _equality_target_only_carries_any_information_impl(
-    target: Type, depth: int
+    target: Type, depth: int, visited: frozenset[int]
 ) -> bool:
     if depth >= _EQUALITY_ANY_RECURSION_LIMIT:
         return False
     proper = get_proper_type(target)
+    proper_id = id(proper)
+    if proper_id in visited:
+        return False
+    visited = visited | {proper_id}
     if isinstance(proper, AnyType):
         return True
     if isinstance(proper, UnionType):
+        if not proper.items:
+            return False
         for item in proper.items:
-            if not _equality_target_only_carries_any_information_impl(item, depth + 1):
+            if not _equality_target_only_carries_any_information_impl(
+                item, depth + 1, visited
+            ):
                 return False
         return True
     if isinstance(proper, TypeVarType):
         if proper.values:
-            return False
+            for value in proper.values:
+                if not _equality_target_only_carries_any_information_impl(
+                    value, depth + 1, visited
+                ):
+                    return False
+            return True
         return _equality_target_only_carries_any_information_impl(
-            proper.upper_bound, depth + 1
+            proper.upper_bound, depth + 1, visited
+        )
+    if isinstance(proper, (ParamSpecType, TypeVarTupleType)):
+        return _equality_target_only_carries_any_information_impl(
+            proper.upper_bound, depth + 1, visited
         )
     if isinstance(proper, TypeType):
-        return _equality_target_only_carries_any_information_impl(proper.item, depth + 1)
+        return _equality_target_only_carries_any_information_impl(
+            proper.item, depth + 1, visited
+        )
+    if isinstance(proper, Instance):
+        if proper.type.is_newtype and proper.type.bases:
+            return _equality_target_only_carries_any_information_impl(
+                proper.type.bases[0], depth + 1, visited
+            )
+        if _instance_has_any_only_dynamic_base(proper):
+            return True
+        return False
+    if isinstance(proper, LiteralType):
+        return _equality_target_only_carries_any_information_impl(
+            proper.fallback, depth + 1, visited
+        )
     if isinstance(proper, PartialType):
         return True
+    return False
+
+
+def _instance_has_any_only_dynamic_base(inst: Instance) -> bool:
+    """Return True when *inst*'s class hierarchy carries a dynamic Any base.
+
+    ``class Foo(Any): ...`` sets ``fallback_to_any`` on the resulting
+    ``TypeInfo``, and any base that itself resolves through an ``AnyType``
+    placeholder taints the class the same way. Such classes have
+    unrestricted membership and cannot refine a receiver's declared type
+    beyond what a bare ``Any`` target would.
+    """
+    if inst.type.fallback_to_any:
+        return True
+    for base in inst.type.bases:
+        base_proper = get_proper_type(base)
+        if isinstance(base_proper, AnyType):
+            return True
     return False
 
 
@@ -8856,43 +8913,70 @@ def _equality_target_contains_any_component(target: Type) -> bool:
 
     Used to decide whether an equality-style narrowing would silently widen
     a well-typed receiver via an ``Any``-tainted union member. Recurses
-    through unions, type variable upper bounds and value constraints, and
+    through unions, type variable upper bounds and value constraints,
+    ``ParamSpec`` and ``TypeVarTuple`` bounds, ``NewType`` bases,
+    ``LiteralType`` fallbacks, dynamic ``class Foo(Any)`` inheritance, and
     ``type[...]`` so that shapes such as ``Union[Any, int]``,
-    ``Optional[Any]``, ``TypeVar('T', bound=Any)`` and ``type[Any]`` are
-    all detected as Any-carrying. Concrete structural containers such as
-    ``list[Any]``, ``tuple[int, Any]`` and ``Callable[..., Any]`` are *not*
-    walked through: the outer container is a concrete narrowing target
-    that mypy can already handle correctly through normal isinstance-like
-    narrowing, and treating them as Any-flavoured here would suppress the
-    unreachable-branch analysis for values that provably cannot be that
-    container shape. A recursion depth bound guards against infinite
-    expansion on self-referential recursive type aliases.
+    ``Optional[Any]``, ``TypeVar('T', bound=Any)``, ``type[Any]``,
+    ``NewType('T', Any)`` and ``class Foo(Any)`` are all detected as
+    Any-carrying. Concrete structural containers such as ``list[Any]``,
+    ``tuple[int, Any]`` and ``Callable[..., Any]`` are *not* walked
+    through. A recursion depth bound and a visited-type set guard against
+    infinite expansion on self-referential recursive type aliases.
     """
-    return _equality_target_contains_any_component_impl(target, 0)
+    return _equality_target_contains_any_component_impl(target, 0, frozenset())
 
 
-def _equality_target_contains_any_component_impl(target: Type, depth: int) -> bool:
+def _equality_target_contains_any_component_impl(
+    target: Type, depth: int, visited: frozenset[int]
+) -> bool:
     if depth >= _EQUALITY_ANY_RECURSION_LIMIT:
         return False
     proper = get_proper_type(target)
+    proper_id = id(proper)
+    if proper_id in visited:
+        return False
+    visited = visited | {proper_id}
     if isinstance(proper, AnyType):
         return True
     if isinstance(proper, UnionType):
         for item in proper.items:
-            if _equality_target_contains_any_component_impl(item, depth + 1):
+            if _equality_target_contains_any_component_impl(
+                item, depth + 1, visited
+            ):
                 return True
         return False
     if isinstance(proper, TypeVarType):
         if proper.values:
             for value in proper.values:
-                if _equality_target_contains_any_component_impl(value, depth + 1):
+                if _equality_target_contains_any_component_impl(
+                    value, depth + 1, visited
+                ):
                     return True
             return False
         return _equality_target_contains_any_component_impl(
-            proper.upper_bound, depth + 1
+            proper.upper_bound, depth + 1, visited
+        )
+    if isinstance(proper, (ParamSpecType, TypeVarTupleType)):
+        return _equality_target_contains_any_component_impl(
+            proper.upper_bound, depth + 1, visited
         )
     if isinstance(proper, TypeType):
-        return _equality_target_contains_any_component_impl(proper.item, depth + 1)
+        return _equality_target_contains_any_component_impl(
+            proper.item, depth + 1, visited
+        )
+    if isinstance(proper, Instance):
+        if proper.type.is_newtype and proper.type.bases:
+            return _equality_target_contains_any_component_impl(
+                proper.type.bases[0], depth + 1, visited
+            )
+        if _instance_has_any_only_dynamic_base(proper):
+            return True
+        return False
+    if isinstance(proper, LiteralType):
+        return _equality_target_contains_any_component_impl(
+            proper.fallback, depth + 1, visited
+        )
     return False
 
 
@@ -8911,32 +8995,53 @@ def _project_target_removing_any_placeholders(target: Type) -> Type | None:
       to ``None`` in the same way; a type variable with concrete value
       constraints is projected through its constraint set.
     * ``type[Any]`` collapses to ``None``.
+    * ``NewType('T', Any)`` collapses to ``None``; a NewType wrapping a
+      concrete base keeps its wrapper as the narrowing target once its
+      underlying base is confirmed informative.
+    * ``ParamSpec`` and ``TypeVarTuple`` targets bounded by ``Any`` collapse
+      to ``None``; otherwise the bound anchors the projection.
+    * ``Instance`` types with an ``Any`` base (``class Foo(Any)`` or
+      ``fallback_to_any``) collapse to ``None``.
+    * ``LiteralType`` targets whose fallback is Any-only collapse to
+      ``None``; ordinary Literal values keep their concrete shape.
     * Structural containers (tuples, callables, generic instances) with
       Any-tainted parts keep their outer shape because that shape still
       carries narrowing information; only union-level Any placeholders are
       stripped.
+    * Nested unions are flattened once through ``flatten_nested_unions`` so
+      that ``Union[Union[Any, int], str]`` is projected as
+      ``Union[int, str]``.
     """
-    return _project_target_removing_any_placeholders_impl(target, 0)
+    return _project_target_removing_any_placeholders_impl(target, 0, frozenset())
 
 
 def _project_target_removing_any_placeholders_impl(
-    target: Type, depth: int
+    target: Type, depth: int, visited: frozenset[int]
 ) -> Type | None:
     if depth >= _EQUALITY_ANY_RECURSION_LIMIT:
         return get_proper_type(target)
     proper = get_proper_type(target)
+    proper_id = id(proper)
+    if proper_id in visited:
+        return proper
+    visited = visited | {proper_id}
     if isinstance(proper, AnyType):
         return None
     if isinstance(proper, UnionType):
         concrete_items: list[Type] = []
-        for item in proper.items:
+        flattened = flatten_nested_unions(
+            proper.items, handle_type_alias_type=True
+        )
+        for item in flattened:
             item_proper = get_proper_type(item)
             if isinstance(item_proper, AnyType):
                 continue
-            if _equality_target_only_carries_any_information(item_proper):
+            if _equality_target_only_carries_any_information_impl(
+                item_proper, depth + 1, visited
+            ):
                 continue
             projected_item = _project_target_removing_any_placeholders_impl(
-                item_proper, depth + 1
+                item_proper, depth + 1, visited
             )
             if projected_item is None:
                 continue
@@ -8951,7 +9056,7 @@ def _project_target_removing_any_placeholders_impl(
             projected_values: list[Type] = []
             for value in proper.values:
                 value_projection = _project_target_removing_any_placeholders_impl(
-                    value, depth + 1
+                    value, depth + 1, visited
                 )
                 if value_projection is not None:
                     projected_values.append(value_projection)
@@ -8964,16 +9069,78 @@ def _project_target_removing_any_placeholders_impl(
         if isinstance(bound_proper, AnyType):
             return None
         return proper
+    if isinstance(proper, (ParamSpecType, TypeVarTupleType)):
+        bound_proper = get_proper_type(proper.upper_bound)
+        if isinstance(bound_proper, AnyType):
+            return None
+        return proper
     if isinstance(proper, TypeType):
         inner_projection = _project_target_removing_any_placeholders_impl(
-            proper.item, depth + 1
+            proper.item, depth + 1, visited
         )
         if inner_projection is None:
             return None
         return TypeType.make_normalized(inner_projection)
+    if isinstance(proper, Instance):
+        if proper.type.is_newtype and proper.type.bases:
+            base_projection = _project_target_removing_any_placeholders_impl(
+                proper.type.bases[0], depth + 1, visited
+            )
+            if base_projection is None:
+                return None
+            return proper
+        if _instance_has_any_only_dynamic_base(proper):
+            return None
+        return proper
+    if isinstance(proper, LiteralType):
+        fallback_projection = _project_target_removing_any_placeholders_impl(
+            proper.fallback, depth + 1, visited
+        )
+        if fallback_projection is None:
+            return None
+        return proper
     if isinstance(proper, PartialType):
         return None
     return proper
+
+
+def _receiver_shares_only_any_tainted_atoms(
+    receiver: ProperType, projection: Type
+) -> bool:
+    """Return True when refining *receiver* against *projection* would drop its Any branch.
+
+    Guards the specific case where the receiver is itself a union with an
+    ``Any`` branch (for example ``Union[int, Any]``) and every non-Any atom
+    of the receiver is already a subtype of the target's concrete
+    projection. Naively narrowing to the projection in that situation would
+    silently drop the ``Any`` branch of the receiver, which is exactly the
+    widening this gate is trying to avoid. Preserving the receiver instead
+    keeps the gradual guarantee intact.
+    """
+    if not isinstance(receiver, UnionType):
+        return False
+    has_any_branch = False
+    concrete_atoms: list[ProperType] = []
+    for item in receiver.items:
+        item_proper = get_proper_type(item)
+        if isinstance(item_proper, AnyType):
+            has_any_branch = True
+            continue
+        concrete_atoms.append(item_proper)
+    if not has_any_branch or not concrete_atoms:
+        return False
+    projection_proper = get_proper_type(projection)
+    if isinstance(projection_proper, UnionType):
+        projection_atoms = [get_proper_type(p) for p in projection_proper.items]
+    else:
+        projection_atoms = [projection_proper]
+    for atom in concrete_atoms:
+        if not any(
+            is_proper_subtype(atom, other, ignore_promotions=True)
+            for other in projection_atoms
+        ):
+            return False
+    return True
 
 
 def _current_is_proper_subtype_of_projection(current: Type, projection: Type) -> bool:
@@ -9004,6 +9171,24 @@ def _preserve_current_narrowing(
     union member for the union-factorisation recursion).
     """
     return current_type, default
+
+
+def _normalize_equality_target(target: Type) -> Type:
+    """Return an Any-taint-aware normalization of *target* for the equality gate.
+
+    Flattens nested unions (including nested unions hidden behind type
+    aliases) so that ``Union[Any, Union[int, str]]`` is treated identically
+    to ``Union[Any, int, str]`` and follows recursive aliases through once
+    so their resolved shape is what the rest of the gate reasons over. The
+    returned type does not modify the caller's ``proposed_type`` in place.
+    """
+    proper = get_proper_type(target)
+    if isinstance(proper, UnionType):
+        flattened = flatten_nested_unions(
+            proper.items, handle_type_alias_type=True
+        )
+        return UnionType.make_union(flattened)
+    return proper
 
 
 _EQUALITY_ANY_RECURSION_LIMIT = 32

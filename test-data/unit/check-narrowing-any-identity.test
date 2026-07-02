@@ -267,3 +267,254 @@ def f(c: C, y: Any) -> None:
         reveal_type(c)  # N: Revealed type is "__main__.C"
         reveal_type(y)  # N: Revealed type is "__main__.C"
 [builtins fixtures/isinstancelist.pyi]
+
+[case testIdentityNarrowingAnyPreservesAgainstNewTypeWrappingConcrete]
+from typing import Any, NewType
+
+class Base: ...
+MyId = NewType('MyId', Base)
+
+def f(x: Any, y: MyId) -> None:
+    if x is y:
+        reveal_type(x)  # N: Revealed type is "__main__.Base"
+        reveal_type(y)  # N: Revealed type is "__main__.MyId"
+[builtins fixtures/primitives.pyi]
+
+[case testIdentityNarrowingAnyPreservesNestedNewTypeWrappers]
+from typing import Any, NewType
+
+class Base: ...
+Inner = NewType('Inner', Base)
+Outer = NewType('Outer', Inner)
+
+def f(x: Any, y: Outer) -> None:
+    if x is y:
+        reveal_type(x)  # N: Revealed type is "__main__.Base"
+        reveal_type(y)  # N: Revealed type is "__main__.Outer"
+[builtins fixtures/primitives.pyi]
+
+[case testIdentityNarrowingAnyPreservesAgainstDynamicClassInheritingAny]
+from typing import Any
+
+class DynBase(Any): ...
+
+def f(x: str, y: DynBase) -> None:
+    if x is y:
+        reveal_type(x)  # N: Revealed type is "builtins.str"
+[builtins fixtures/primitives.pyi]
+
+[case testIdentityNarrowingAnyPreservesAgainstNewTypeWrappingDynamicClass]
+from typing import Any, NewType
+
+class DynBase(Any): ...
+DynId = NewType('DynId', DynBase)
+
+def f(x: str, y: DynId) -> None:
+    if x is y:
+        reveal_type(x)  # N: Revealed type is "builtins.str"
+[builtins fixtures/primitives.pyi]
+
+[case testIdentityNarrowingAnyPreservesUnionReceiverWithAnyBranchAgainstUnionAny]
+from typing import Any, Union
+
+def f(x: Union[int, Any], y: Union[int, Any]) -> None:
+    if x is y:
+        reveal_type(x)  # N: Revealed type is "builtins.int | Any"
+        reveal_type(y)  # N: Revealed type is "builtins.int | Any"
+[builtins fixtures/primitives.pyi]
+
+[case testIdentityNarrowingAnyPreservesUnionReceiverAgainstSupersetAnyUnion]
+from typing import Any, Union
+
+def f(x: Union[int, Any], y: Union[int, str, Any]) -> None:
+    if x is y:
+        reveal_type(x)  # N: Revealed type is "builtins.int | Any | builtins.str"
+[builtins fixtures/primitives.pyi]
+
+[case testIdentityNarrowingAnyPreservesAgainstNestedFlattenedUnion]
+from typing import Any, Union
+
+MaybeAny = Union[Any, int]
+
+def f(x: str, y: Union[MaybeAny, str]) -> None:
+    if x is y:
+        reveal_type(x)  # N: Revealed type is "builtins.str"
+[builtins fixtures/primitives.pyi]
+
+[case testIdentityNarrowingAnyPreservesAgainstTypeVarWithAllAnyValueConstraints]
+from typing import Any, TypeVar
+
+T = TypeVar('T', Any, Any)
+
+def f(x: str, y: T) -> T:
+    if x is y:
+        reveal_type(x)  # N: Revealed type is "builtins.str"
+    return y
+[builtins fixtures/primitives.pyi]
+
+[case testIdentityNarrowingAnyPreservesAgainstDeeplyNestedAnyUnion]
+from typing import Any, Union
+
+DeepAny = Union[Union[Any, Any], Any]
+
+def f(x: str, y: DeepAny) -> None:
+    if x is y:
+        reveal_type(x)  # N: Revealed type is "builtins.str"
+[builtins fixtures/primitives.pyi]
+
+[case testIdentityNarrowingAnyPreservesAcrossRecursiveTypeAlias]
+from typing import Any, Union
+from typing_extensions import TypeAlias
+
+Rec: TypeAlias = "Union[Any, Rec, int]"  # type: ignore[misc]
+
+def f(x: str, y: Rec) -> None:
+    if x is y:
+        reveal_type(x)  # N: Revealed type is "builtins.str"
+[builtins fixtures/primitives.pyi]
+
+[case testIdentityNarrowingAnyNewTypeWrappingAnyEnumFallbackPreserves]
+import enum
+from typing import Any, NewType
+
+class Status(enum.Enum):
+    A = enum.auto()
+    B = enum.auto()
+
+StatusId = NewType('StatusId', Status)
+CURRENT: StatusId = StatusId(Status.A)
+
+def check(value: Any) -> None:
+    if value is CURRENT:
+        reveal_type(CURRENT)  # N: Revealed type is "__main__.StatusId"
+        reveal_type(value)  # N: Revealed type is "__main__.Status"
+[builtins fixtures/primitives.pyi]
+
+[case testIdentityNarrowingAnyPreservesUnionWithClassInheritingAny]
+from typing import Any, Union
+
+class DynBase(Any): ...
+
+def f(x: str, y: Union[DynBase, int]) -> None:
+    if x is y:
+        reveal_type(x)  # N: Revealed type is "builtins.str"
+[builtins fixtures/primitives.pyi]
+
+[case testIdentityNarrowingAnyPreservesTypeVarWithMixedAnyValues]
+from typing import Any, TypeVar
+
+T = TypeVar('T', int, Any)
+
+def f(x: str, y: T) -> None:
+    if x is y:
+        reveal_type(x)  # N: Revealed type is "builtins.str"
+[builtins fixtures/primitives.pyi]
+
+[case testIdentityNarrowingAnyPreservesTypeOfClassInheritingAny]
+from typing import Any, Type
+
+class DynBase(Any): ...
+
+def f(x: str, y: Type[DynBase]) -> None:
+    if x is y:
+        reveal_type(x)  # N: Revealed type is "builtins.str"
+[builtins fixtures/primitives.pyi]
+
+[case testIdentityNarrowingAnyPreservesUnionOfDynamicClasses]
+from typing import Any, Union
+
+class DynA(Any): ...
+class DynB(Any): ...
+
+def f(x: str, y: Union[DynA, DynB]) -> None:
+    if x is y:
+        reveal_type(x)  # N: Revealed type is "builtins.str"
+[builtins fixtures/primitives.pyi]
+
+[case testIdentityNarrowingAnyProjectsUnionWithDynamicClassMember]
+from typing import Any, Union
+
+class DynBase(Any): ...
+
+def f(x: int, y: Union[DynBase, int]) -> None:
+    if x is y:
+        reveal_type(x)  # N: Revealed type is "builtins.int"
+[builtins fixtures/primitives.pyi]
+
+[case testIdentityNarrowingAnyPreservesNestedTypeVarWithAnyBound]
+from typing import Any, TypeVar
+
+T = TypeVar('T', bound=Any)
+
+def f(x: str, y: T) -> T:
+    if x is y:
+        reveal_type(x)  # N: Revealed type is "builtins.str"
+    return y
+[builtins fixtures/primitives.pyi]
+
+[case testIdentityNarrowingAnyPreservesTypeVarValueConstraintsIncludingAny]
+from typing import Any, TypeVar, Union
+
+T = TypeVar('T', str, Any, int)
+
+def f(x: bytes, y: T) -> None:
+    if x is y:
+        reveal_type(x)  # N: Revealed type is "builtins.bytes"
+[builtins fixtures/primitives.pyi]
+
+[case testIdentityNarrowingAnyIgnoresConcreteListWithAnyArg]
+from typing import Any, List
+
+def f(x: str, y: List[Any]) -> None:
+    if x is y:
+        # list[Any] is a concrete container; str vs list[Any] does not overlap
+        # so narrowing collapses to unreachable rather than widening x.
+        reveal_type(x)  # N: Revealed type is "builtins.str"
+[builtins fixtures/list.pyi]
+
+[case testIdentityNarrowingAnyDoesNotTouchConcreteCallableWithAnyReturn]
+from typing import Any, Callable
+
+def f(x: int, y: Callable[[int], Any]) -> None:
+    if x is y:
+        reveal_type(x)  # N: Revealed type is "builtins.int"
+[builtins fixtures/primitives.pyi]
+
+[case testIdentityNarrowingAnyPreservesUnionOfClassInheritingAnyAndBareAny]
+from typing import Any, Union
+
+class DynBase(Any): ...
+
+def f(x: str, y: Union[DynBase, Any]) -> None:
+    if x is y:
+        reveal_type(x)  # N: Revealed type is "builtins.str"
+[builtins fixtures/primitives.pyi]
+
+[case testIdentityNarrowingAnyPreservesLiteralAgainstUnionWithClassInheritingAny]
+from typing import Any, Literal, Union
+
+class DynBase(Any): ...
+
+def f(x: Literal[1, 2], y: Union[DynBase, int]) -> None:
+    if x is y:
+        reveal_type(x)  # N: Revealed type is "Literal[1] | Literal[2]"
+[builtins fixtures/primitives.pyi]
+
+[case testIdentityNarrowingAnyPreservesConcreteAgainstMultipleAnyBranches]
+from typing import Any, TypeVar, Union
+
+T = TypeVar('T', bound=Any)
+
+def f(x: str, y: Union[Any, T, int]) -> None:
+    if x is y:
+        reveal_type(x)  # N: Revealed type is "builtins.str"
+[builtins fixtures/primitives.pyi]
+
+[case testIdentityNarrowingAnyDoesNotSuppressUnreachableForConcreteContainer]
+# flags: --warn-unreachable
+from typing import Any, List
+
+def f(x: None, y: List[Any]) -> None:
+    if x is y:
+        reveal_type(x)  # E: Statement is unreachable
+[builtins fixtures/list.pyi]
