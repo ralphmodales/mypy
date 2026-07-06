@@ -61,6 +61,36 @@ from mypy.plugins.singledispatch import (
     create_singledispatch_function_callback,
     singledispatch_register_callback,
 )
+from mypy.plugins.struct import (
+    STRUCT_CALCSIZE_FULLNAME,
+    STRUCT_CLASS_FORMAT_FULLNAME,
+    STRUCT_CLASS_FULLNAME,
+    STRUCT_CLASS_ITER_UNPACK_FULLNAME,
+    STRUCT_CLASS_PACK_FULLNAME,
+    STRUCT_CLASS_PACK_INTO_FULLNAME,
+    STRUCT_CLASS_SIZE_FULLNAME,
+    STRUCT_CLASS_UNPACK_FROM_FULLNAME,
+    STRUCT_CLASS_UNPACK_FULLNAME,
+    STRUCT_ITER_UNPACK_FULLNAME,
+    STRUCT_PACK_FULLNAME,
+    STRUCT_PACK_INTO_FULLNAME,
+    STRUCT_UNPACK_FROM_FULLNAME,
+    STRUCT_UNPACK_FULLNAME,
+    struct_calcsize_callback,
+    struct_class_callback,
+    struct_class_format_callback,
+    struct_class_iter_unpack_callback,
+    struct_class_pack_callback,
+    struct_class_pack_into_callback,
+    struct_class_size_callback,
+    struct_class_unpack_callback,
+    struct_class_unpack_from_callback,
+    struct_iter_unpack_callback,
+    struct_pack_callback,
+    struct_pack_into_callback,
+    struct_unpack_callback,
+    struct_unpack_from_callback,
+)
 from mypy.subtypes import is_subtype
 from mypy.typeops import is_literal_type_like, make_simplified_union
 from mypy.types import (
@@ -107,6 +137,20 @@ class DefaultPlugin(Plugin):
             return enum_member_callback
         elif fullname == "builtins.len":
             return len_callback
+        elif fullname == STRUCT_UNPACK_FULLNAME:
+            return struct_unpack_callback
+        elif fullname == STRUCT_UNPACK_FROM_FULLNAME:
+            return struct_unpack_from_callback
+        elif fullname == STRUCT_ITER_UNPACK_FULLNAME:
+            return struct_iter_unpack_callback
+        elif fullname == STRUCT_PACK_FULLNAME:
+            return struct_pack_callback
+        elif fullname == STRUCT_PACK_INTO_FULLNAME:
+            return struct_pack_into_callback
+        elif fullname == STRUCT_CALCSIZE_FULLNAME:
+            return struct_calcsize_callback
+        elif fullname == STRUCT_CLASS_FULLNAME:
+            return struct_class_callback
         return None
 
     def get_function_signature_hook(
@@ -164,6 +208,16 @@ class DefaultPlugin(Plugin):
             return call_singledispatch_function_after_register_argument
         elif fullname == "functools.partial.__call__":
             return partial_call_callback
+        elif fullname == STRUCT_CLASS_UNPACK_FULLNAME:
+            return struct_class_unpack_callback
+        elif fullname == STRUCT_CLASS_UNPACK_FROM_FULLNAME:
+            return struct_class_unpack_from_callback
+        elif fullname == STRUCT_CLASS_ITER_UNPACK_FULLNAME:
+            return struct_class_iter_unpack_callback
+        elif fullname == STRUCT_CLASS_PACK_FULLNAME:
+            return struct_class_pack_callback
+        elif fullname == STRUCT_CLASS_PACK_INTO_FULLNAME:
+            return struct_class_pack_into_callback
         return None
 
     def get_attribute_hook(self, fullname: str) -> Callable[[AttributeContext], Type] | None:
@@ -175,6 +229,10 @@ class DefaultPlugin(Plugin):
             return enum_name_callback
         elif fullname in ENUM_VALUE_ACCESS:
             return enum_value_callback
+        elif fullname == STRUCT_CLASS_SIZE_FULLNAME:
+            return struct_class_size_callback
+        elif fullname == STRUCT_CLASS_FORMAT_FULLNAME:
+            return struct_class_format_callback
         return None
 
     def get_class_decorator_hook(self, fullname: str) -> Callable[[ClassDefContext], None] | None:
